@@ -79,15 +79,19 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 	let started = false;
 	let finished = false;
 	const byIndex = new Map<number, { contentIndex: number; json: string }>();
+	/** Bare-name tool calls skipped in the current Anthropic message (see `isBareOffered`). */
+	let skipped = 0;
+	/** Token counts of earlier Anthropic messages of this turn (a message that only held skipped calls is followed by another one). */
+	const carried = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 };
 
 	const ensureStarted = () => { if (!started) { started = true; init.emit({ type: "start", partial: message }); } };
 	const applyUsage = (u: any) => {
 		if (!u || typeof u !== "object") return;
-		const set = (key: keyof Omit<Usage, "cost" | "totalTokens">, v: unknown) => { if (typeof v === "number") message.usage[key] = v; };
+		const set = (key: keyof typeof carried, v: unknown) => { if (typeof v === "number") message.usage[key] = carried[key] + v; };
 		set("input", u.input_tokens); set("output", u.output_tokens);
 		set("cacheRead", u.cache_read_input_tokens); set("cacheWrite", u.cache_creation_input_tokens);
 		const longWrite = u.cache_creation?.ephemeral_1h_input_tokens;
-		if (typeof longWrite === "number") message.usage.cacheWrite1h = longWrite;
+		set("cacheWrite1h", longWrite);
 		const x = message.usage; x.totalTokens = x.input + x.output + x.cacheRead + x.cacheWrite;
 		try { init.applyCost?.(x); } catch { /* unknown rates must not break the turn: the cost stays as it was */ }
 	};
@@ -98,6 +102,13 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 		const stripped = name.slice(init.toolPrefix.length);
 		return stripped && (!offered || offered.has(stripped)) ? stripped : undefined;
 	};
+
+	/**
+	 * An offered Pi tool called without the MCP prefix (the model copied the name from Pi's prompt). claude does not know that name:
+	 * it answers the model with `No such tool available` itself and the model tries again in the same turn, so the call is dropped
+	 * instead of failing the turn. It never reaches Pi.
+	 */
+	const isBareOffered = (name: unknown): boolean => typeof name === "string" && !!offered?.has(name);
 
 	function fail(errorMessage: string, reason: "error" | "aborted" = "error") {
 		if (finished) return;
@@ -141,6 +152,7 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 					init.emit({ type: "thinking_start", contentIndex, partial: message });
 				} else if (b.type === "tool_use") {
 					const name = piToolName(b.name);
+					if (name === undefined && isBareOffered(b.name)) { skipped++; break; }
 					if (name === undefined) { fail(`Claude called a tool Pi did not offer: ${printableName(b.name)}`); return "done"; }
 					if (typeof b.id !== "string" || !b.id) { fail(`Claude called a tool without an id: ${printableName(b.name)}`); return "done"; }
 					message.content.push({ type: "toolCall", id: b.id, name, arguments: {} });
@@ -199,6 +211,17 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 			case "message_stop":
 				ensureStarted();
 				if (message.stopReason === "pending") { fail("Claude message ended without a stop reason"); return "done"; }
+				if (skipped > 0) {
+					skipped = 0;
+					if (message.stopReason === "toolUse" && !message.content.some((c) => c.type === "toolCall")) {
+						// Only skipped calls: claude answers them itself and the model's next message belongs to this same turn.
+						for (const key of Object.keys(carried) as (keyof typeof carried)[]) carried[key] = message.usage[key] ?? 0;
+						message.stopReason = "pending";
+						message.rawStopReason = undefined;
+						byIndex.clear();
+						return "continue";
+					}
+				}
 				finished = true;
 				init.emit({ type: "done", reason: message.stopReason as "stop" | "length" | "toolUse", message });
 				return "done";

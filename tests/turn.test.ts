@@ -256,3 +256,53 @@ test("a throwing cost callback never breaks the turn", () => {
 	assert.equal(mapper.handle({ type: "message_stop" }), "done");
 	assert.equal((events.at(-1) as any).message.usage.cost.total, 0);
 });
+
+const bareCall = (id: string, name: string) => [
+	{ type: "message_start", message: { id, model: "claude-sonnet-5-5", usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 100, cache_creation_input_tokens: 5 } } },
+	toolStart({ type: "tool_use", id: "toolu_bare", name, input: {} }),
+	{ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{\"x\":1}" } },
+	{ type: "content_block_stop", index: 0 },
+	{ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 4 } },
+];
+
+test("an offered tool called without the prefix is skipped: claude answers it itself and the turn continues with its next message", () => {
+	const { events, mapper, types } = strict(["read", "subagent_run"]);
+	for (const e of bareCall("msg_1", "subagent_run")) assert.equal(mapper.handle(e), "continue");
+	assert.equal(mapper.handle({ type: "message_stop" }), "continue");
+	assert.equal(mapper.finished, false);
+	assert.deepEqual(types(), ["start"]);
+	for (const e of [
+		{ type: "message_start", message: { id: "msg_2", model: "claude-sonnet-5-5", usage: { input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 200, cache_creation_input_tokens: 0 } } },
+		toolStart({ type: "tool_use", id: "toolu_2", name: "mcp__pi__subagent_run", input: {} }),
+		{ type: "content_block_stop", index: 0 },
+		{ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 6 } },
+	]) assert.equal(mapper.handle(e), "continue");
+	assert.equal(mapper.handle({ type: "message_stop" }), "done");
+	assert.deepEqual(types(), ["start", "toolcall_start", "toolcall_end", "done"]);
+	const done = events.at(-1) as Extract<RelayEvent, { type: "done" }>;
+	assert.equal(done.reason, "toolUse");
+	assert.deepEqual(done.message.content, [{ type: "toolCall", id: "toolu_2", name: "subagent_run", arguments: {} }]);
+	assert.equal(done.message.responseId, "msg_2");
+	// both Anthropic messages were billed: their usage adds up
+	assert.deepEqual({ ...done.message.usage, cost: undefined }, { input: 30, output: 10, cacheRead: 300, cacheWrite: 5, totalTokens: 345, cost: undefined });
+});
+
+test("a skipped bare call next to a real tool call ends the message normally with only the real call", () => {
+	const { events, mapper, types } = strict(["read"]);
+	mapper.handle(start());
+	mapper.handle(toolStart({ type: "tool_use", id: "t_bare", name: "read", input: {} }, 0));
+	mapper.handle({ type: "content_block_stop", index: 0 });
+	mapper.handle(toolStart({ type: "tool_use", id: "t_ok", name: "mcp__pi__read", input: {} }, 1));
+	mapper.handle({ type: "content_block_stop", index: 1 });
+	mapper.handle({ type: "message_delta", delta: { stop_reason: "tool_use" } });
+	assert.equal(mapper.handle({ type: "message_stop" }), "done");
+	assert.deepEqual(types(), ["start", "toolcall_start", "toolcall_end", "done"]);
+	assert.deepEqual((events.at(-1) as any).message.content, [{ type: "toolCall", id: "t_ok", name: "read", arguments: {} }]);
+});
+
+test("a bare name Pi did not offer still fails the turn, also with toolNames", () => {
+	const { events, mapper } = strict(["read"]);
+	mapper.handle(start());
+	assert.equal(mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "Bash", input: {} })), "done");
+	assert.equal((events.at(-1) as any).error.errorMessage, "Claude called a tool Pi did not offer: Bash");
+});

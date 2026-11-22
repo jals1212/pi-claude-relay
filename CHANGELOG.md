@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- A turn no longer fails with `Claude called a tool Pi did not offer: <name>` when Claude calls an offered Pi tool by its bare name (without the `mcp__pi__` prefix). `claude` answers that call itself with `No such tool available` and the model tries again; the relay now drops the call and continues the same turn with Claude's next message, adding up the usage of both. Names Pi did not offer still fail the turn.
+
 ## 0.1.0
 
 First release.

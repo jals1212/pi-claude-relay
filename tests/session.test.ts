@@ -498,6 +498,26 @@ test("an ordinary claude failure keeps the plain exit message (no version hint, 
 	assert.equal((events.at(-1) as any).error.errorMessage, "claude exited with code 2: ENOENT: no such file '/x'");
 });
 
+test("an offered tool called without the prefix does not fail the turn: the next claude message completes it", async () => {
+	const { session, procs, hosts } = setup();
+	const events = await turn(session, [u("hola")], () => {
+		const ev = (event: any) => procs[0].emit({ type: "stream_event", event });
+		ev({ type: "message_start", message: { id: "m1", model: "claude-sonnet-5-5", usage: {} } });
+		ev({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_bare", name: "read", input: {} } });
+		ev({ type: "content_block_stop", index: 0 });
+		ev({ type: "message_delta", delta: { stop_reason: "tool_use" } });
+		ev({ type: "message_stop" });
+		// claude answers the unknown name itself and the model tries again
+		procs[0].emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bare", is_error: true, content: "<tool_use_error>Error: No such tool available: read</tool_use_error>" }] } });
+		procs[0].toolUse("m2", "toolu_1", "read", { path: "a" });
+	});
+	const last = events.at(-1) as any;
+	assert.equal(last.type, "done");
+	assert.equal(last.reason, "toolUse");
+	assert.deepEqual(last.message.content, [{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a" } }]);
+	assert.deepEqual(hosts[0].expected, [{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a" } }]);
+});
+
 test("a tool_use for a tool Pi did not offer fails the turn instead of reaching Pi", async () => {
 	const { session, procs, hosts } = setup();
 	const events = await turn(session, [u("hola")], () => procs[0].toolUse("m1", "toolu_9", "write", { path: "x" }));
