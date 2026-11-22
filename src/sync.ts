@@ -76,6 +76,21 @@ export function restartPlan(messages: PiMessage[], reason: string, resume?: Extr
 /** Pi keeps the assistant message of an aborted turn in its context (pi-agent-core `agent-loop.js`); claude never saw it as an answer. */
 const isAborted = (m: PiMessage) => m.role === "assistant" && m.stopReason === "aborted";
 
+type UserMessage = Extract<PiMessage, { role: "user" }>;
+const asBlocks = (content: string | PiContent[]): PiContent[] => (typeof content === "string" ? [{ type: "text", text: content }] : content);
+
+/**
+ * Consecutive user messages as the one user line claude receives, or undefined when another role is among them.
+ * Pi turns each extension notice into its own user message and often adds two at once (a result and its wake-up notice):
+ * sending them together keeps the live claude session, and its prompt cache, instead of replaying the whole history.
+ */
+function mergeUsers(messages: PiMessage[]): UserMessage | undefined {
+	if (messages.length === 0 || messages.some((m) => m.role !== "user")) return undefined;
+	const users = messages as UserMessage[];
+	if (users.length === 1) return users[0];
+	return { role: "user", content: users.flatMap((m) => asBlocks(m.content)), timestamp: users.at(-1)!.timestamp };
+}
+
 /**
  * Whether the live claude session (the snapshot) can continue with `messages`: a `send` / `resolve` plan, or the reason it cannot.
  * Aborted assistant messages between the snapshot and the new input are skipped.
@@ -89,8 +104,8 @@ function continuation(prev: Snapshot, messages: PiMessage[]): Plan | string {
 	if (live.length === 0) return "nothing new to send";
 
 	if (prev.pendingToolCallIds.length === 0) {
-		if (live.length === 1 && live[0].role === "user") return { kind: "send", message: live[0] };
-		return "unexpected messages after a finished turn";
+		const message = mergeUsers(live);
+		return message ? { kind: "send", message } : "unexpected messages after a finished turn";
 	}
 
 	const results = [] as Extract<PiMessage, { role: "toolResult" }>[];
@@ -101,8 +116,8 @@ function continuation(prev: Snapshot, messages: PiMessage[]): Plan | string {
 	const covers = prev.pendingToolCallIds.length === ids.size && prev.pendingToolCallIds.every((id) => ids.has(id));
 	if (!covers) return "tool results do not match pending tool calls";
 	if (rest.length === 0) return { kind: "resolve", results, then: undefined };
-	if (rest.length === 1 && rest[0].role === "user") return { kind: "resolve", results, then: rest[0] };
-	return "unexpected messages after tool results";
+	const then = mergeUsers(rest);
+	return then ? { kind: "resolve", results, then } : "unexpected messages after tool results";
 }
 
 export function planTurn(prev: Snapshot | undefined, next: { config: SessionConfig; messages: PiMessage[] }): Plan {

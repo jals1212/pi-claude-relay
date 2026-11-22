@@ -254,8 +254,35 @@ test("only an aborted assistant message and nothing else new still restarts (not
 	assert.equal(plan.kind === "restart" && plan.resume, undefined);
 });
 
-test("anything else after the snapshot still diverges or restarts (a second user message, a non-aborted assistant message, an errored one)", () => {
-	for (const extra of [[u("uno"), u("dos")], [a("zz"), u("dos")], [{ ...aborted(), stopReason: "error" } as PiMessage, u("dos")]]) {
+test("several user messages after a finished turn (an extension result and its wake-up notice): send them as one user line", () => {
+	const plan = planTurn(snap([u("hola"), a("m1")]), { config: cfg, messages: [u("hola"), a("m1"), u("uno"), { role: "user", content: [{ type: "text", text: "dos" }, { type: "image", data: "x", mimeType: "image/png" }], timestamp: 7 }] });
+	assert.deepEqual(plan, { kind: "send", message: { role: "user", content: [{ type: "text", text: "uno" }, { type: "text", text: "dos" }, { type: "image", data: "x", mimeType: "image/png" }], timestamp: 7 } });
+});
+
+test("several user messages with aborted assistant messages between them: send them as one user line", () => {
+	const plan = planTurn(snap([u("hola")]), { config: cfg, messages: [u("hola"), u("uno"), aborted(), u("dos")] });
+	assert.deepEqual(plan, { kind: "send", message: { role: "user", content: [{ type: "text", text: "uno" }, { type: "text", text: "dos" }], timestamp: 1 } });
+});
+
+test("tool results followed by several user messages: resolve, then send them as one user line", () => {
+	const prev = snap([u("lee"), a("m1", [toolCall("t1")])], ["t1"]);
+	const plan = planTurn(prev, { config: cfg, messages: [u("lee"), a("m1", [toolCall("t1")]), r("t1"), u("uno"), u("dos")] });
+	assert.deepEqual(plan, { kind: "resolve", results: [r("t1")], then: { role: "user", content: [{ type: "text", text: "uno" }, { type: "text", text: "dos" }], timestamp: 1 } });
+});
+
+test("a config change with several new user messages is resumable with them as one user line", () => {
+	const plan = planTurn(snap([u("hola"), a("m1")]), { config: { ...cfg, effort: "high" }, messages: [u("hola"), a("m1"), u("uno"), u("dos")] });
+	assert.deepEqual(plan.kind === "restart" && plan.resume, { role: "user", content: [{ type: "text", text: "uno" }, { type: "text", text: "dos" }], timestamp: 1 });
+});
+
+test("user messages mixed with another role after tool results still restart", () => {
+	const prev = snap([u("lee"), a("m1", [toolCall("t1")])], ["t1"]);
+	const plan = planTurn(prev, { config: cfg, messages: [u("lee"), a("m1", [toolCall("t1")]), r("t1"), u("uno"), a("zz"), u("dos")] });
+	assert.equal(plan.kind === "restart" && plan.reason, "unexpected messages after tool results");
+});
+
+test("anything else after the snapshot still diverges or restarts (a non-aborted assistant message, an errored one)", () => {
+	for (const extra of [[a("zz"), u("dos")], [u("uno"), a("zz"), u("dos")], [{ ...aborted(), stopReason: "error" } as PiMessage, u("dos")]]) {
 		const plan = planTurn(snap([u("hola")]), { config: cfg, messages: [u("hola"), ...extra] });
 		assert.equal(plan.kind, "restart");
 		assert.equal(plan.kind === "restart" && plan.resume, undefined);

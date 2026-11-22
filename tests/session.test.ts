@@ -127,6 +127,17 @@ test("second turn reuses the same process (no respawn, no replay)", async () => 
 	assert.deepEqual(procs[0].written.at(-1), { type: "user", message: { role: "user", content: [{ type: "text", text: "y?" }] } });
 });
 
+test("two user messages after a finished turn (a notice and its wake-up) reuse the same process as one user line", async () => {
+	const { session, procs } = setup();
+	const e1 = await turn(session, [u("hola")], () => procs[0].text("m1", "a"));
+	procs[0].emit({ type: "result", subtype: "success", is_error: false });
+	const assistant = (e1.at(-1) as any).message;
+	await turn(session, [u("hola"), assistant, u("resultado"), u("despierta")], () => procs[0].text("m2", "b"));
+	assert.equal(procs.length, 1, "no respawn, no flattened replay");
+	assert.equal(procs[0].written.length, 2);
+	assert.deepEqual(procs[0].written.at(-1), { type: "user", message: { role: "user", content: [{ type: "text", text: "resultado" }, { type: "text", text: "despierta" }] } });
+});
+
 test("tool use: expects the call on the host, ends with toolUse; results are resolved on the next turn", async () => {
 	const { session, procs, hosts } = setup();
 	const e1 = await turn(session, [u("lee")], () => procs[0].toolUse("m1", "toolu_1", "read", { path: "a" }));

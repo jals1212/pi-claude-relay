@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- Background notices no longer restart `claude` and replay the whole conversation. Pi turns each extension notice into its own user message, and a finished subagent or background job usually adds two at once (a result and its wake-up notice). The relay continued the live session only for exactly one new user message, so every such notice started a new `claude` session with a flattened transcript: the prompt cache of the conversation was lost and the whole history was written to the cache again, often 250k–330k tokens per notice. Several user messages in a row, after a finished turn or after the tool results, are now sent to the live process together as one user line.
+
 ## 0.1.3
 
 ### Fixed
