@@ -1,7 +1,7 @@
 // One relay session per Pi session: a live `claude` process + its MCP host.
 // stream() turns one Pi request into exactly one Anthropic message from claude.
 import { createHash, randomUUID } from "node:crypto";
-import { createTurnMapper, type RelayEvent, type TurnMapper, type Usage } from "./turn.ts";
+import { createTurnMapper, claudeToolName, type RelayEvent, type TurnMapper, type Usage } from "./turn.ts";
 import { planTurn, restartPlan, restartCategory, fingerprint, renderTranscript, type Plan, type PiMessage, type Snapshot, type SessionConfig, type PiContent } from "./sync.ts";
 import type { McpHost, PiTool } from "./mcp-host.ts";
 import { retryableRateLimitMessage } from "./rate-limit.ts";
@@ -109,7 +109,7 @@ export function buildClaudeArgs(o: ClaudeArgsOptions): string[] {
 	const args = [
 		"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--include-partial-messages", "--replay-user-messages", "--verbose",
 		"--tools", "", "--strict-mcp-config", "--mcp-config", o.mcpConfigFile,
-		"--setting-sources", "", "--permission-mode", "default", "--allowedTools", o.toolNames.map((n) => TOOL_PREFIX + n).join(","),
+		"--setting-sources", "", "--permission-mode", "default", "--allowedTools", o.toolNames.map((n) => TOOL_PREFIX + claudeToolName(n)).join(","),
 		...persistence, "--model", o.model, "--system-prompt-file", o.systemPromptFile,
 		// claude asks the API for `display: "omitted"` by default, which streams thinking blocks with a signature and no text.
 		"--thinking-display", "summarized",

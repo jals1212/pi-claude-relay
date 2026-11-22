@@ -306,3 +306,24 @@ test("a bare name Pi did not offer still fails the turn, also with toolNames", (
 	assert.equal(mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "Bash", input: {} })), "done");
 	assert.equal((events.at(-1) as any).error.errorMessage, "Claude called a tool Pi did not offer: Bash");
 });
+
+test("a tool whose name claude rewrites (characters outside letters, digits, _ and -) maps back to Pi's own name", () => {
+	for (const [piName, claudeName] of [["weird.name-x", "weird_name-x"], ["sp ace", "sp_ace"], ["ñandú", "_and_"]]) {
+		const { events, mapper, types } = strict(["read", piName]);
+		mapper.handle(start());
+		mapper.handle(toolStart({ type: "tool_use", id: "t1", name: `mcp__pi__${claudeName}`, input: {} }));
+		assert.deepEqual(types(), ["start", "toolcall_start"], piName);
+		assert.equal((events[1] as any).partial.content[0].name, piName);
+	}
+});
+
+test("a rewritten name that two offered tools share is not guessed: the turn fails; an exact name still wins", () => {
+	const bad = strict(["a.b", "a b"]);
+	bad.mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "mcp__pi__a_b", input: {} }));
+	assert.equal((bad.events.at(-1) as any).error.errorMessage, "Claude called a tool Pi did not offer: mcp__pi__a_b");
+	assert.equal(bad.events.some((e) => e.type === "toolcall_start"), false);
+
+	const exact = strict(["a.b", "a_b"]);
+	exact.mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "mcp__pi__a_b", input: {} }));
+	assert.equal((exact.events.at(-1) as any).partial.content[0].name, "a_b");
+});

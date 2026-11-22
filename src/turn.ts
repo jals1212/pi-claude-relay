@@ -60,6 +60,11 @@ export interface TurnMapper {
 	fail(errorMessage: string, reason?: "error" | "aborted"): void;
 }
 
+/** The name claude gives an MCP tool: every character outside letters, digits, `_` and `-` becomes `_` (seen on Claude Code 2.1.330). */
+export function claudeToolName(name: string): string {
+	return name.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 /** Printable, single-line, at most 80 characters; `unknown` when there is nothing usable. */
 function printableName(name: unknown): string {
 	if (typeof name !== "string") return "unknown";
@@ -96,11 +101,25 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 		try { init.applyCost?.(x); } catch { /* unknown rates must not break the turn: the cost stays as it was */ }
 	};
 	const offered = init.toolNames ? new Set(init.toolNames) : undefined;
+	/** Offered names claude rewrites, by the rewritten name. A rewritten name two tools share (or that is another tool's own name) is left out: it is never guessed. */
+	const rewritten = new Map<string, string>();
+	if (offered) {
+		const shared = new Set<string>();
+		for (const n of offered) {
+			const c = claudeToolName(n);
+			if (c === n) continue;
+			if (offered.has(c) || rewritten.has(c)) shared.add(c);
+			rewritten.set(c, n);
+		}
+		for (const c of shared) rewritten.delete(c);
+	}
 	/** The Pi tool name for a tool_use, or undefined when Pi did not offer it (not prefixed, not a string, not in toolNames). */
 	const piToolName = (name: unknown): string | undefined => {
 		if (typeof name !== "string" || !name.startsWith(init.toolPrefix)) return undefined;
 		const stripped = name.slice(init.toolPrefix.length);
-		return stripped && (!offered || offered.has(stripped)) ? stripped : undefined;
+		if (!stripped) return undefined;
+		if (!offered || offered.has(stripped)) return stripped;
+		return rewritten.get(stripped);
 	};
 
 	/**
@@ -108,7 +127,7 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 	 * it answers the model with `No such tool available` itself and the model tries again in the same turn, so the call is dropped
 	 * instead of failing the turn. It never reaches Pi.
 	 */
-	const isBareOffered = (name: unknown): boolean => typeof name === "string" && !!offered?.has(name);
+	const isBareOffered = (name: unknown): boolean => typeof name === "string" && (!!offered?.has(name) || rewritten.has(name));
 
 	function fail(errorMessage: string, reason: "error" | "aborted" = "error") {
 		if (finished) return;
