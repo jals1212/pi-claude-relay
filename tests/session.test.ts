@@ -526,14 +526,19 @@ test("an offered tool called without the prefix does not fail the turn: the next
 	assert.deepEqual(hosts[0].expected, [{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a" } }]);
 });
 
-test("a tool_use for a tool Pi did not offer fails the turn instead of reaching Pi", async () => {
+test("a tool_use for a tool Pi did not offer never reaches Pi: claude answers it and its next message completes the turn", async () => {
 	const { session, procs, hosts } = setup();
-	const events = await turn(session, [u("hola")], () => procs[0].toolUse("m1", "toolu_9", "write", { path: "x" }));
+	const events = await turn(session, [u("hola")], () => {
+		procs[0].toolUse("m1", "toolu_9", "write", { path: "x" });
+		procs[0].emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_9", is_error: true, content: "<tool_use_error>Error: No such tool available: mcp__pi__write</tool_use_error>" }] } });
+		procs[0].toolUse("m2", "toolu_1", "read", { path: "a" });
+	});
 	const last = events.at(-1) as any;
-	assert.equal(last.type, "error");
-	assert.equal(last.error.errorMessage, "Claude called a tool Pi did not offer: mcp__pi__write");
-	assert.deepEqual(hosts[0].expected, []);
-	assert.ok(!events.some((e) => e.type === "toolcall_end"));
+	assert.equal(last.type, "done");
+	assert.equal(last.reason, "toolUse");
+	assert.deepEqual(last.message.content, [{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a" } }]);
+	assert.deepEqual(hosts[0].expected, [{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a" } }]);
+	assert.ok(!events.some((e: any) => e.type === "toolcall_end" && e.toolCall.id === "toolu_9"));
 });
 
 test("a claude crash never surfaces the session's MCP URL", async () => {

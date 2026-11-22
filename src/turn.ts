@@ -74,6 +74,9 @@ function printableName(name: unknown): string {
 
 const STOP_REASONS: Record<string, StopReason> = { end_turn: "stop", stop_sequence: "stop", pause_turn: "stop", refusal: "stop", max_tokens: "length", model_context_window_exceeded: "length", tool_use: "toolUse" };
 
+/** Tool calls claude answers itself (unknown names) that one turn may drop; the next one fails the turn, so a model stuck on a made-up name cannot loop. */
+export const MAX_SKIPPED_CALLS = 3;
+
 export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 	const now = init.now ?? Date.now;
 	const message: RelayMessage = {
@@ -84,8 +87,10 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 	let started = false;
 	let finished = false;
 	const byIndex = new Map<number, { contentIndex: number; json: string }>();
-	/** Bare-name tool calls skipped in the current Anthropic message (see `isBareOffered`). */
+	/** Tool calls skipped in the current Anthropic message (see `claudeAnswersItself`). */
 	let skipped = 0;
+	/** Tool calls skipped in the whole turn, bounded by `MAX_SKIPPED_CALLS`. */
+	let skippedInTurn = 0;
 	/** Token counts of earlier Anthropic messages of this turn (a message that only held skipped calls is followed by another one). */
 	const carried = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 };
 
@@ -122,12 +127,16 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 		return rewritten.get(stripped);
 	};
 
+	/** The names claude itself knows: the offered tools as its MCP server lists them. Without toolNames, every prefixed name. */
+	const claudeKnown = offered ? new Set([...offered].map((n) => init.toolPrefix + claudeToolName(n))) : undefined;
 	/**
-	 * An offered Pi tool called without the MCP prefix (the model copied the name from Pi's prompt). claude does not know that name:
-	 * it answers the model with `No such tool available` itself and the model tries again in the same turn, so the call is dropped
-	 * instead of failing the turn. It never reaches Pi.
+	 * A name claude does not know: an offered tool called without the MCP prefix (the model copied it from Pi's prompt) or a name
+	 * the model made up (`mcp__pi__notification`, a doubled prefix). claude answers the model with `No such tool available` itself
+	 * and the model tries again in the same turn, so the call is dropped instead of failing the turn. It never reaches Pi.
+	 * A name claude does know but Pi cannot map (a rewritten name two offered tools share) is not dropped: claude would run it.
 	 */
-	const isBareOffered = (name: unknown): boolean => typeof name === "string" && (!!offered?.has(name) || rewritten.has(name));
+	const claudeAnswersItself = (name: unknown): boolean =>
+		typeof name === "string" && name !== "" && (claudeKnown ? !claudeKnown.has(name) : !name.startsWith(init.toolPrefix));
 
 	function fail(errorMessage: string, reason: "error" | "aborted" = "error") {
 		if (finished) return;
@@ -171,7 +180,7 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 					init.emit({ type: "thinking_start", contentIndex, partial: message });
 				} else if (b.type === "tool_use") {
 					const name = piToolName(b.name);
-					if (name === undefined && isBareOffered(b.name)) { skipped++; break; }
+					if (name === undefined && claudeAnswersItself(b.name) && skippedInTurn < MAX_SKIPPED_CALLS) { skipped++; skippedInTurn++; break; }
 					if (name === undefined) { fail(`Claude called a tool Pi did not offer: ${printableName(b.name)}`); return "done"; }
 					if (typeof b.id !== "string" || !b.id) { fail(`Claude called a tool without an id: ${printableName(b.name)}`); return "done"; }
 					message.content.push({ type: "toolCall", id: b.id, name, arguments: {} });

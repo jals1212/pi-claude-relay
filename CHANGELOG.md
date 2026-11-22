@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- A turn no longer fails with `Claude called a tool Pi did not offer: <name>` when the model calls a tool name that does not exist, such as a made-up `mcp__pi__notification`, a doubled prefix (`mcp__pi__mcp__pi__subagent_parent_message`) or a bare `Bash`. `claude` answers such a call itself with `No such tool available` and the model tries again, as it already did for an offered tool called by its bare name; the relay now drops the call and continues the turn. The call never reaches Pi. A turn drops at most 3 such calls; the 4th fails it with the same message, so a model stuck on a wrong name cannot loop. A renamed name that two offered tools share still fails the turn.
+
 ## 0.1.2
 
 No changes to the package itself: its code is the same as 0.1.1.

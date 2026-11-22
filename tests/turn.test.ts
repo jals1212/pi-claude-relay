@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createTurnMapper, type RelayEvent } from "../src/turn.ts";
+import { createTurnMapper, MAX_SKIPPED_CALLS, type RelayEvent } from "../src/turn.ts";
 
 function harness() {
 	const events: RelayEvent[] = [];
@@ -152,20 +152,72 @@ function strict(toolNames?: string[]) {
 }
 const toolStart = (block: unknown, index = 0) => ({ type: "content_block_start", index, content_block: block });
 
-test("a tool_use that lacks the tool prefix fails the turn and is never emitted as a tool call", () => {
-	const { events, mapper, types } = strict();
-	mapper.handle(start());
-	assert.equal(mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "Bash", input: {} })), "done");
+test("a tool_use with a name claude does not know is skipped and never emitted as a tool call", () => {
+	const cases: [string[] | undefined, string][] = [
+		[undefined, "Bash"], [["read"], "Bash"], [["read"], "mcp__pi__rm_rf"], [["read"], "mcp__pi__notification"],
+		[["read", "subagent_parent_message"], "mcp__pi__mcp__pi__subagent_parent_message"],
+	];
+	for (const [toolNames, name] of cases) {
+		const { events, mapper, types } = strict(toolNames);
+		mapper.handle(start());
+		assert.equal(mapper.handle(toolStart({ type: "tool_use", id: "t1", name, input: {} })), "continue", name);
+		assert.equal(mapper.handle({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } }), "continue");
+		assert.equal(mapper.handle({ type: "content_block_stop", index: 0 }), "continue");
+		assert.deepEqual(types(), ["start"], name);
+		assert.equal(mapper.finished, false);
+		assert.deepEqual(mapper.message.content, []);
+	}
+});
+
+test(`call ${MAX_SKIPPED_CALLS + 1} with an unknown name fails the turn, across messages, so a model stuck on a made-up name cannot loop`, () => {
+	const { events, mapper, types } = strict(["read"]);
+	for (let i = 0; i < MAX_SKIPPED_CALLS; i++) {
+		for (const e of bareCall(`msg_${i}`, i % 2 ? "read" : "mcp__pi__notification")) assert.equal(mapper.handle(e), "continue");
+		assert.equal(mapper.handle({ type: "message_stop" }), "continue");
+	}
+	assert.deepEqual(types(), ["start"]);
+	mapper.handle({ type: "message_start", message: { id: "msg_last", usage: {} } });
+	assert.equal(mapper.handle(toolStart({ type: "tool_use", id: "t_last", name: "mcp__pi__notification", input: {} })), "done");
 	assert.deepEqual(types(), ["start", "error"]);
 	const err = events.at(-1) as Extract<RelayEvent, { type: "error" }>;
 	assert.equal(err.reason, "error");
-	assert.equal(err.error.errorMessage, "Claude called a tool Pi did not offer: Bash");
+	assert.equal(err.error.stopReason, "error");
+	assert.equal(err.error.errorMessage, "Claude called a tool Pi did not offer: mcp__pi__notification");
 	assert.deepEqual(err.error.content, []);
 	assert.equal(mapper.finished, true);
 	// later events of the dead turn are ignored
 	assert.equal(mapper.handle({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } }), "done");
 	assert.equal(mapper.handle({ type: "message_stop" }), "done");
 	assert.deepEqual(types(), ["start", "error"]);
+});
+
+test("a message holding only skipped calls that ends with end_turn completes the turn with no tool call", () => {
+	const { events, mapper, types } = strict(["read"]);
+	mapper.handle(start());
+	mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "mcp__pi__notification", input: {} }));
+	mapper.handle({ type: "content_block_stop", index: 0 });
+	mapper.handle({ type: "message_delta", delta: { stop_reason: "end_turn" } });
+	assert.equal(mapper.handle({ type: "message_stop" }), "done");
+	assert.deepEqual(types(), ["start", "done"]);
+	const done = events.at(-1) as Extract<RelayEvent, { type: "done" }>;
+	assert.equal(done.reason, "stop");
+	assert.deepEqual(done.message.content, []);
+});
+
+test("without toolNames, the bare prefix alone is not skipped: it fails the turn", () => {
+	const { events, mapper } = strict();
+	mapper.handle(start());
+	assert.equal(mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "mcp__pi__", input: {} })), "done");
+	assert.equal((events.at(-1) as any).error.errorMessage, "Claude called a tool Pi did not offer: mcp__pi__");
+	assert.equal(events.some((e) => e.type === "toolcall_start"), false);
+});
+
+test("the skip limit is per turn: a new turn may skip again", () => {
+	for (let t = 0; t < 2; t++) {
+		const { mapper, types } = strict(["read"]);
+		for (let i = 0; i < MAX_SKIPPED_CALLS; i++) assert.equal(mapper.handle(toolStart({ type: "tool_use", id: `s${i}`, name: "Bash", input: {} }, i)), "continue");
+		assert.deepEqual(types(), ["start"]);
+	}
 });
 
 test("a tool_use without a string name fails the turn as unknown, without throwing", () => {
@@ -179,11 +231,11 @@ test("a tool_use without a string name fails the turn as unknown, without throwi
 	}
 });
 
-test("with toolNames, a prefixed tool Pi did not offer fails the turn; offered tools still map", () => {
+test("with toolNames, a prefixed tool Pi did not offer is skipped, never a tool call; offered tools still map", () => {
 	const bad = strict(["read"]);
-	bad.mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "mcp__pi__rm_rf", input: {} }));
-	assert.equal((bad.events.at(-1) as any).error.errorMessage, "Claude called a tool Pi did not offer: mcp__pi__rm_rf");
-	assert.equal(bad.events.some((e) => e.type === "toolcall_start"), false);
+	assert.equal(bad.mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "mcp__pi__rm_rf", input: {} })), "continue");
+	assert.deepEqual(bad.types(), ["start"]);
+	assert.equal(bad.mapper.finished, false);
 
 	const ok = strict(["read"]);
 	ok.mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "mcp__pi__read", input: {} }));
@@ -192,7 +244,8 @@ test("with toolNames, a prefixed tool Pi did not offer fails the turn; offered t
 });
 
 test("the tool name in the error is printable and at most 80 characters", () => {
-	const { events, mapper } = strict();
+	const { events, mapper } = strict(["read"]);
+	for (let i = 0; i < MAX_SKIPPED_CALLS; i++) mapper.handle(toolStart({ type: "tool_use", id: `s${i}`, name: "Bash", input: {} }, i));
 	mapper.handle(toolStart({ type: "tool_use", id: "t1", name: `ev\u0000il\n\u001b[31m${"x".repeat(200)}`, input: {} }));
 	const msg = (events.at(-1) as any).error.errorMessage as string;
 	const name = msg.replace("Claude called a tool Pi did not offer: ", "");
@@ -300,11 +353,22 @@ test("a skipped bare call next to a real tool call ends the message normally wit
 	assert.deepEqual((events.at(-1) as any).message.content, [{ type: "toolCall", id: "t_ok", name: "read", arguments: {} }]);
 });
 
-test("a bare name Pi did not offer still fails the turn, also with toolNames", () => {
-	const { events, mapper } = strict(["read"]);
-	mapper.handle(start());
-	assert.equal(mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "Bash", input: {} })), "done");
-	assert.equal((events.at(-1) as any).error.errorMessage, "Claude called a tool Pi did not offer: Bash");
+test("an unknown name alone in a message is skipped like a bare offered name: claude's next message completes the turn", () => {
+	for (const name of ["Bash", "mcp__pi__parameter_placeholder"]) {
+		const { events, mapper, types } = strict(["read"]);
+		for (const e of bareCall("msg_1", name)) assert.equal(mapper.handle(e), "continue");
+		assert.equal(mapper.handle({ type: "message_stop" }), "continue");
+		for (const e of [
+			{ type: "message_start", message: { id: "msg_2", usage: {} } },
+			{ type: "message_delta", delta: { stop_reason: "end_turn" } },
+		]) assert.equal(mapper.handle(e), "continue");
+		assert.equal(mapper.handle({ type: "message_stop" }), "done");
+		assert.deepEqual(types(), ["start", "done"], name);
+		const done = events.at(-1) as Extract<RelayEvent, { type: "done" }>;
+		assert.equal(done.reason, "stop");
+		assert.deepEqual(done.message.content, []);
+		assert.equal(done.message.responseId, "msg_2");
+	}
 });
 
 test("a tool whose name claude rewrites (characters outside letters, digits, _ and -) maps back to Pi's own name", () => {
