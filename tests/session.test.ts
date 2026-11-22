@@ -1517,3 +1517,57 @@ test("long Pi tools are not cut by claude's 5-minute MCP idle timer: per-server 
 	assert.equal("CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS" in env, false);
 	assert.equal(env.PATH, "/bin");
 });
+
+test("parallel tool calls answered together, then claude's result: claude is not stopped", async () => {
+	const { session, procs, hosts } = setup();
+	const e1 = await turn(session, [u("lee dos")], () => {
+		const ev = (event: any) => procs[0].emit({ type: "stream_event", event });
+		ev({ type: "message_start", message: { id: "m1", usage: {} } });
+		for (const [i, id] of [[0, "toolu_a"], [1, "toolu_b"]] as const) {
+			ev({ type: "content_block_start", index: i, content_block: { type: "tool_use", id, name: "mcp__pi__read", input: {} } });
+			ev({ type: "content_block_delta", index: i, delta: { type: "input_json_delta", partial_json: JSON.stringify({ path: id }) } });
+			ev({ type: "content_block_stop", index: i });
+		}
+		ev({ type: "message_delta", delta: { stop_reason: "tool_use" } });
+		ev({ type: "message_stop" });
+	});
+	await turn(session, [u("lee dos"), (e1.at(-1) as any).message, readResult("toolu_a"), readResult("toolu_b")], () => procs[0].text("m2", "ok"));
+	assert.deepEqual(hosts[0].resolved.map(([id]) => id), ["toolu_a", "toolu_b"]);
+	procs[0].emit({ type: "result", subtype: "success", is_error: false });
+	assert.equal(procs[0].killed, false);
+	assert.equal(procs.length, 1);
+});
+
+test("an error result while Pi still runs the tool stops claude; the next request restarts with reason `missing-tool-call`", async () => {
+	const infos: TurnInfo[] = [];
+	const { session, procs } = setup({ onTurn: (i) => infos.push(structuredClone(i)) });
+	const e1 = await turn(session, [u("revisa")], () => procs[0].toolUse("m1", "toolu_long", "read", { path: "a" }));
+	procs[0].emit({ type: "result", subtype: "error_during_execution", is_error: true });
+	assert.equal(procs[0].killed, true);
+	await turn(session, [u("revisa"), (e1.at(-1) as any).message, readResult("toolu_long")], () => procs[1].text("m2", "ok"));
+	assert.deepEqual([infos[1].plan, infos[1].reason], ["restart", "missing-tool-call"]);
+});
+
+test("claude ending its turn while the results request waits (nothing streamed yet) restarts within that request", async () => {
+	const { session, procs, hosts } = setup();
+	const e1 = await turn(session, [u("lee")], () => procs[0].toolUse("m1", "toolu_1", "read", { path: "a" }));
+	const e2 = await turn(session, [u("lee"), (e1.at(-1) as any).message, readResult("toolu_1")], () => {
+		procs[0].emit({ type: "result", subtype: "success", is_error: false }); // claude never took the delivered result
+		setImmediate(() => procs[1].text("m2", "recuperado"));
+	});
+	assert.equal(hosts[0].resolved.length, 1, "the result was handed over before claude ended its turn");
+	assert.equal(procs[0].killed, true);
+	assert.equal((e2.at(-1) as any).message.content[0].text, "recuperado");
+});
+
+test("after a drop the restart reason `missing-tool-call` is reported once; later turns on the new process have no reason", async () => {
+	const infos: TurnInfo[] = [];
+	const { session, procs, hosts } = setup({ onTurn: (i) => infos.push(structuredClone(i)) });
+	const e1 = await turn(session, [u("revisa")], () => procs[0].toolUse("m1", "toolu_long", "read", { path: "a" }));
+	hosts[0].drop("toolu_long");
+	const history = [u("revisa"), (e1.at(-1) as any).message, readResult("toolu_long")];
+	const e2 = await turn(session, history, () => procs[1].text("m2", "ok"));
+	procs[1].emit({ type: "result", subtype: "success", is_error: false });
+	await turn(session, [...history, (e2.at(-1) as any).message, u("sigue")], () => procs[1].text("m3", "b"));
+	assert.deepEqual(infos.map((i) => [i.plan, i.reason]), [["spawn", undefined], ["restart", "missing-tool-call"], ["send", undefined]]);
+});

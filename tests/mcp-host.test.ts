@@ -406,3 +406,20 @@ test("answered or failed calls never report a drop, even when the connection clo
 		assert.deepEqual(drops, []);
 	});
 });
+
+test("a cancellation for an answered call, or with a request id of another type, changes nothing", async () => {
+	await withHost(async (host) => {
+		const drops: string[] = [];
+		host.onDrop((id) => drops.push(id));
+		host.expect({ type: "toolCall", id: "toolu_ok", name: "read", arguments: { path: "a" } });
+		host.resolve("toolu_ok", { content: [{ type: "text", text: "done" }], isError: false });
+		const ok = await parkedCall(host, 3, "toolu_ok");
+		assert.equal((await ok!.json()).result.content[0].text, "done");
+		assert.equal((await rpc(host, "notifications/cancelled", { requestId: 3 }, null)).status, 202);
+		host.expect({ type: "toolCall", id: "toolu_b", name: "read", arguments: { path: "a" } });
+		void parkedCall(host, 4, "toolu_b");
+		await settleIo();
+		assert.equal((await rpc(host, "notifications/cancelled", { requestId: "4" }, null)).status, 202);
+		assert.deepEqual([drops, host.pendingIds()], [[], ["toolu_b"]]);
+	});
+});

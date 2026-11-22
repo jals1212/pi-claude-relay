@@ -77,16 +77,16 @@ export function createMcpHost(opts: { tools: PiTool[] }): McpHost {
 	function onToolCall(params: any, rpcId: string | number, reply: Reply) {
 		const toolUseId = params?._meta?.["claudecode/toolUseId"];
 		const key = keyOf(params?.name, params?.arguments);
+		// A dropped call is never attached again: claude already went on without it.
 		const entry = typeof toolUseId === "string"
-			? entries.find((e) => !e.reply && e.call.id === toolUseId)
-			: entries.find((e) => !e.reply && e.key === key);
+			? entries.find((e) => !e.reply && !e.dropped && e.call.id === toolUseId)
+			: entries.find((e) => !e.reply && !e.dropped && e.key === key);
 		if (!entry) {
 			reply({ content: [{ type: "text", text: `Tool call ${params?.name} was not requested by Pi; it was not run.` }], isError: true });
 			return;
 		}
 		entry.reply = reply;
 		entry.rpcId = rpcId;
-		entry.dropped = false;
 		answer(entry);
 	}
 
@@ -173,8 +173,7 @@ export function createMcpHost(opts: { tools: PiTool[] }): McpHost {
 			case "tools/call": {
 				const reply: Reply = (result) => send({ result });
 				res.on("close", () => {
-					// Client gave up: forget the reply so a later result is kept for a retry, and stop reporting the call as pending
-					// (a session that waited for it would hang forever).
+					// Client gave up: the call is no longer pending and the session is told, so it never waits for it (it would hang forever).
 					if (!done) { const e = entries.find((x) => x.reply === reply); if (e) drop(e); }
 				});
 				return onToolCall(msg.params, msg.id, reply);

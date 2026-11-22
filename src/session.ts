@@ -343,6 +343,9 @@ export function createSession(deps: SessionDeps): RelaySession {
 				const text = redact(typeof v.result === "string" && v.result ? v.result : `claude returned ${v.subtype ?? "an error"}`);
 				active.mapper.fail(retryableRateLimitMessage(text, v, lastRateStatus));
 				active.settle();
+			} else if (requestsLeft === 0 && active.recover && !active.mapper.started) {
+				// The request delivered tool results and claude ended its turn without taking them: it gave up on the calls.
+				abandonToolCalls(gen);
 			} else if (requestsLeft === 0) {
 				// claude finished everything it was asked and the turn never completed: nothing more will arrive.
 				active.mapper.fail("claude ended the turn without a response");
