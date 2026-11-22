@@ -1,0 +1,109 @@
+<!doctype html>
+<!-- Source of assets/preview.png, the Pi package gallery preview (package.json pi.image).
+     Regenerate on macOS: qlmanage -t -s 1280 -o <dir> assets/preview.html, then
+     sips -c 640 1280 <dir>/preview.html.png --out assets/preview.png
+     (Quick Look renders a 1000px square page: the image is the band in its middle, hence the zoom and margin below).
+     Look: an electromechanical relay on a circuit board. PCB green, copper traces and pads, white silkscreen, a lit LED;
+     the relay's contact switches Pi's requests over to claude. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { width: 100%; height: 1000px; overflow: hidden;
+    background:
+      radial-gradient(ellipse at 22% 45%, rgba(214,140,69,.12) 0%, transparent 45%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 32px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 32px),
+      linear-gradient(120deg, #0f3324 0%, #0b2619 50%, #071a11 100%); }
+  body { zoom: 0.78125; }
+  body { width: 1280px; height: 640px; margin-top: 320px; position: relative; }
+  body {
+    color: #eef2ec;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    display: flex; align-items: center; gap: 48px; padding: 0 64px;
+  }
+  .traces { position: absolute; inset: 0; z-index: 0; }
+  .left, .term { position: relative; z-index: 1; }
+  .left { width: 520px; }
+  .silk { font-size: 16px; letter-spacing: 4px; color: #cfd8cf; text-transform: uppercase; opacity: .85; }
+  h1 { font-size: 58px; font-weight: 700; letter-spacing: 1px; color: #e39a55; margin: 14px 0 4px -2px;
+    text-shadow: 0 1px 0 #f6c18f55, 0 -1px 0 #00000099; white-space: nowrap; }
+  h1 .pi { color: #eef2ec; }
+  p { font: 24px/1.42 -apple-system, "Helvetica Neue", sans-serif; color: #c6d2c8; margin-top: 18px; }
+  .tags { margin-top: 26px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .tags span { font: 600 16px/1 ui-monospace, "SF Mono", Menlo, monospace; color: #f0c08f;
+    background: #12301f; border: 1px solid #8a5a2b; border-radius: 4px; padding: 9px 13px; }
+  .term { flex: 1; background: #0e1511; border: 1px solid #2f5a41; border-radius: 10px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.55); overflow: hidden; }
+  .bar { height: 36px; background: #15211a; display: flex; align-items: center; gap: 8px; padding: 0 16px; }
+  .bar i { width: 12px; height: 12px; border-radius: 50%; display: block; background: #2f4a3a; }
+  .body { padding: 20px 24px 22px; font: 18px/1.7 ui-monospace, "SF Mono", Menlo, monospace; color: #d3ddd5; }
+  .body > div { white-space: pre; }
+  .prompt { color: #e39a55; }
+  .dim { color: #7f9286; }
+  .ok { color: #6fdc8c; }
+  .warn { color: #f2c14e; }
+  .cu { color: #e39a55; font-weight: 700; }
+</style>
+</head>
+<body>
+  <svg class="traces" width="1280" height="640" viewBox="0 0 1280 640" fill="none">
+    <g stroke="#b8733a" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity=".55">
+      <path d="M0 96 H220 L250 66 H560"/>
+      <path d="M0 560 H160 L196 596 H600"/>
+      <path d="M560 66 V110"/>
+    </g>
+    <g fill="#d68c45" opacity=".7">
+      <circle cx="560" cy="110" r="9"/><circle cx="600" cy="596" r="9"/>
+    </g>
+    <g fill="#071a11"><circle cx="560" cy="110" r="3.5"/><circle cx="600" cy="596" r="3.5"/></g>
+  </svg>
+
+  <div class="left">
+    <svg width="330" height="150" viewBox="0 0 330 150" fill="none" aria-label="relay K1 switching PI to CLAUDE">
+      <!-- relay body -->
+      <rect x="70" y="18" width="190" height="114" rx="8" fill="#151c18" stroke="#eef2ec" stroke-width="2" stroke-dasharray="0"/>
+      <text x="80" y="38" fill="#cfd8cf" font-size="13" letter-spacing="2" font-family="ui-monospace, Menlo, monospace">K1</text>
+      <!-- coil -->
+      <path d="M100 112 c0 -14 14 -14 14 0 c0 -14 14 -14 14 0 c0 -14 14 -14 14 0 c0 -14 14 -14 14 0" stroke="#e39a55" stroke-width="3"/>
+      <path d="M100 112 V122 M156 112 V122" stroke="#e39a55" stroke-width="3"/>
+      <!-- contact: common, closed to CLAUDE -->
+      <circle cx="120" cy="66" r="5" fill="#eef2ec"/>
+      <line x1="120" y1="66" x2="212" y2="52" stroke="#eef2ec" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="214" cy="52" r="5" fill="#eef2ec"/>
+      <circle cx="214" cy="84" r="5" fill="none" stroke="#7f9286" stroke-width="2"/>
+      <!-- copper legs -->
+      <path d="M0 66 H115" stroke="#d68c45" stroke-width="6" stroke-linecap="round"/>
+      <path d="M219 52 H330" stroke="#d68c45" stroke-width="6" stroke-linecap="round"/>
+      <text x="2" y="58" fill="#eef2ec" font-size="15" font-weight="700" font-family="ui-monospace, Menlo, monospace">PI</text>
+      <text x="262" y="44" fill="#eef2ec" font-size="15" font-weight="700" font-family="ui-monospace, Menlo, monospace">CLAUDE</text>
+      <!-- LED -->
+      <circle cx="292" cy="104" r="16" fill="#6fdc8c" opacity=".22"/>
+      <circle cx="292" cy="104" r="8" fill="#6fdc8c"/>
+      <text x="270" y="140" fill="#cfd8cf" font-size="12" letter-spacing="2" font-family="ui-monospace, Menlo, monospace">D1 ON</text>
+    </svg>
+    <h1><span class="pi">pi-</span>claude-relay</h1>
+    <div class="silk">Pi · anthropic · via claude CLI</div>
+    <p>Pi's Anthropic models, served by the official <code>claude</code> CLI. Same model ids, each space with its own login, the prompt cache kept warm.</p>
+    <div class="tags"><span>official CLI</span><span>per-space login</span><span>~99% cache</span><span>tools via MCP</span></div>
+  </div>
+
+  <div class="term">
+    <div class="bar"><i></i><i></i><i></i></div>
+    <div class="body">
+<div><span class="prompt">❯</span> pi --model claude-sonnet-5-5</div>
+<div class="dim">  relay · one claude process per session</div>
+<div> </div>
+<div><span class="prompt">❯</span> read src/session.ts and fix the test</div>
+<div><span class="dim">  read</span> src/session.ts</div>
+<div><span class="dim">  bash</span> npm test  <span class="ok">✓ 280 passed</span></div>
+<div> </div>
+<div><span class="dim">  cache r/w</span> <span class="cu">47,366</span><span class="dim"> / 89 · hit 99%</span></div>
+<div> </div>
+<div><span class="ok">✓</span> Claude relay · subscription</div>
+<div>Claude 5h <span class="ok">5%</span> · 7d <span class="warn">86%</span> · <span class="warn">resets in 4d 2h</span></div>
+    </div>
+  </div>
+</body>
+</html>

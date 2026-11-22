@@ -1,0 +1,53 @@
+{
+  "name": "pi-claude-relay",
+  "version": "0.1.0",
+  "description": "Pi extension that relays Pi's built-in Anthropic provider through the official Claude Code CLI (`claude -p` stream-json), with Pi tools served over a per-session local MCP server.",
+  "license": "MIT",
+  "author": "jals1212",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jals1212/pi-claude-relay.git"
+  },
+  "homepage": "https://github.com/jals1212/pi-claude-relay#readme",
+  "bugs": {
+    "url": "https://github.com/jals1212/pi-claude-relay/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "claude",
+    "provider"
+  ],
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions/claude-relay.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/jals1212/pi-claude-relay/main/assets/preview.png"
+  },
+  "files": [
+    "src",
+    "extensions",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test \"tests/*.test.ts\""
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}
