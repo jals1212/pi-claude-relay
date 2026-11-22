@@ -25,6 +25,11 @@ export interface McpHost {
 	failAll(message: string): void;
 	/** Ids of expected calls that have no delivered result yet. */
 	pendingIds(): string[];
+	/**
+	 * Called with the Pi tool call id when claude gives up on a parked call (it closed the request or sent
+	 * `notifications/cancelled`): claude has moved on without the result, so it can no longer receive it.
+	 */
+	onDrop(cb: (id: string) => void): void;
 }
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -32,7 +37,7 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024;
 type Reply = (result: unknown) => void;
 
 /** `dropped`: claude called the tool and then gave up on the request, so nobody is waiting for its result any more. */
-interface Entry { call: ExpectedCall; key: string; reply?: Reply; result?: ToolResult; dropped?: boolean }
+interface Entry { call: ExpectedCall; key: string; reply?: Reply; rpcId?: string | number; result?: ToolResult; dropped?: boolean }
 
 /** JSON with sorted object keys, so argument key order does not matter. */
 export function canonicalJson(value: unknown): string {
@@ -50,6 +55,16 @@ export function createMcpHost(opts: { tools: PiTool[] }): McpHost {
 	const token = randomBytes(16).toString("hex");
 	const entries: Entry[] = []; // in Pi tool-call order
 	let url = "";
+	let dropListener: ((id: string) => void) | undefined;
+
+	/** claude stopped waiting for this parked call: nobody can receive its result any more. */
+	function drop(entry: Entry) {
+		if (!entry.reply) return;
+		entry.reply = undefined;
+		entry.rpcId = undefined;
+		entry.dropped = true;
+		try { dropListener?.(entry.call.id); } catch { /* a listener must not break the server */ }
+	}
 
 	const keyOf = (name: string, args: unknown) => `${name}\u0000${canonicalJson(args ?? {})}`;
 
@@ -59,7 +74,7 @@ export function createMcpHost(opts: { tools: PiTool[] }): McpHost {
 		entries.splice(entries.indexOf(entry), 1);
 	}
 
-	function onToolCall(params: any, reply: Reply) {
+	function onToolCall(params: any, rpcId: string | number, reply: Reply) {
 		const toolUseId = params?._meta?.["claudecode/toolUseId"];
 		const key = keyOf(params?.name, params?.arguments);
 		const entry = typeof toolUseId === "string"
@@ -70,6 +85,7 @@ export function createMcpHost(opts: { tools: PiTool[] }): McpHost {
 			return;
 		}
 		entry.reply = reply;
+		entry.rpcId = rpcId;
 		entry.dropped = false;
 		answer(entry);
 	}
@@ -126,7 +142,15 @@ export function createMcpHost(opts: { tools: PiTool[] }): McpHost {
 		let msg: any;
 		try { msg = JSON.parse(body.text); } catch { rpcError(res, 400, null, -32700, "Parse error"); return; }
 		if (!msg || typeof msg !== "object" || Array.isArray(msg)) { rpcError(res, 400, null, -32600, "Invalid Request: expected a JSON-RPC request object"); return; }
-		if (msg.id === undefined || msg.id === null) { res.writeHead(202).end(); return; }
+		if (msg.id === undefined || msg.id === null) {
+			if (msg.method === "notifications/cancelled") {
+				const requestId = msg.params?.requestId;
+				const e = entries.find((x) => x.reply && x.rpcId !== undefined && x.rpcId === requestId);
+				if (e) drop(e);
+			}
+			res.writeHead(202).end();
+			return;
+		}
 		if (typeof msg.id !== "string" && typeof msg.id !== "number") { rpcError(res, 400, null, -32600, "Invalid Request: bad id"); return; }
 		if (typeof msg.method !== "string") { rpcError(res, 400, msg.id, -32600, "Invalid Request: method must be a string"); return; }
 		let done = false;
@@ -151,9 +175,9 @@ export function createMcpHost(opts: { tools: PiTool[] }): McpHost {
 				res.on("close", () => {
 					// Client gave up: forget the reply so a later result is kept for a retry, and stop reporting the call as pending
 					// (a session that waited for it would hang forever).
-					if (!done) { const e = entries.find((x) => x.reply === reply); if (e) { e.reply = undefined; e.dropped = true; } }
+					if (!done) { const e = entries.find((x) => x.reply === reply); if (e) drop(e); }
 				});
-				return onToolCall(msg.params, reply);
+				return onToolCall(msg.params, msg.id, reply);
 			}
 			default:
 				return send({ error: { code: -32601, message: `Method not found: ${msg.method}` } });
@@ -200,6 +224,9 @@ export function createMcpHost(opts: { tools: PiTool[] }): McpHost {
 		},
 		pendingIds() {
 			return entries.filter((e) => !e.result && !e.dropped).map((e) => e.call.id);
+		},
+		onDrop(cb) {
+			dropListener = cb;
 		},
 	};
 }

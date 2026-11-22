@@ -50,7 +50,7 @@ test("spawnClaude keeps the system prompt and MCP URL out of argv, in private fi
 	assert.ok(!argv.includes("SECRET-SYSTEM-PROMPT"), "system prompt must not be visible in argv");
 	assert.ok(!argv.includes("secret-token"), "MCP URL token must not be visible in argv");
 	assert.equal(r.sp.content, opts.systemPrompt);
-	assert.deepEqual(JSON.parse(r.mcp.content), { mcpServers: { pi: { type: "http", url: opts.mcpUrl } } });
+	assert.deepEqual(JSON.parse(r.mcp.content), { mcpServers: { pi: { type: "http", url: opts.mcpUrl, timeout: 86400000 } } });
 	assert.equal(r.sp.mode, 0o600);
 	assert.equal(r.mcp.mode, 0o600);
 	assert.equal(r.sp.dirMode, 0o700);

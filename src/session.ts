@@ -99,8 +99,15 @@ export interface RelaySession {
 /** Launch inputs for claude. The system prompt and MCP config (which holds the secret MCP URL) travel in private files, never argv: argv is visible to every local user through `ps`, and Linux caps one argument at 128 KiB. */
 export interface ClaudeArgsOptions { model: string; effort: string; toolNames: string[]; systemPromptFile: string; mcpConfigFile: string; sessionId?: string; resume?: string }
 
+/** How long claude waits for one Pi tool call, in ms (24 h): Pi tools (reviews, CI, subagents) can run for a long time without output. */
+export const TOOL_CALL_TIMEOUT_MS = 86_400_000;
+
+/**
+ * The per-server `timeout` is the wall-clock limit of one call and also the floor of claude's MCP idle timer, which otherwise
+ * aborts an HTTP tool call that sends no response or progress for 5 minutes, while Pi is still running the tool.
+ */
 export function mcpConfig(mcpUrl: string): object {
-	return { mcpServers: { pi: { type: "http", url: mcpUrl } } };
+	return { mcpServers: { pi: { type: "http", url: mcpUrl, timeout: TOOL_CALL_TIMEOUT_MS } } };
 }
 
 export function buildClaudeArgs(o: ClaudeArgsOptions): string[] {
@@ -124,6 +131,8 @@ export function buildChildEnv(parent: NodeJS.ProcessEnv, credential: ClaudeCrede
 	for (const [k, v] of Object.entries(parent)) {
 		// Every ANTHROPIC_* (base URL, custom headers, Foundry keys, ...) could reroute or replace the space's credential.
 		if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k.startsWith("ANTHROPIC_") || k === "CLAUDE_CONFIG_DIR") continue;
+		// Auto-backgrounding would let claude go on while a Pi tool call is still parked.
+		if (k === "CLAUDE_AUTO_BACKGROUND_TASKS") continue;
 		env[k] = v;
 	}
 	env.CLAUDE_CONFIG_DIR = configDir;
@@ -133,7 +142,9 @@ export function buildChildEnv(parent: NodeJS.ProcessEnv, credential: ClaudeCrede
 		DISABLE_AUTO_COMPACT: "1",
 		CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
 		CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH: "16384",
-		MCP_TOOL_TIMEOUT: "86400000",
+		MCP_TOOL_TIMEOUT: String(TOOL_CALL_TIMEOUT_MS),
+		// 0 turns off the 5-minute idle timer for MCP tool calls (the per-server `timeout` in mcpConfig also lifts it).
+		CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: "0",
 	});
 	return env;
 }
@@ -163,7 +174,8 @@ export function createSession(deps: SessionDeps): RelaySession {
 	let host: McpHost | undefined;
 	/** What claude's session knows. Kept when the process is lost, so a restart can resume the session; cleared only when a flattened replay starts a new one. */
 	let snapshot: Snapshot | undefined;
-	let active: { mapper: TurnMapper; settle: () => void; onRateLimit?: (info: any) => void } | undefined;
+	/** `recover`: restart claude for this same request; set while the request only waits for parked tool calls to be answered. */
+	let active: { mapper: TurnMapper; settle: () => void; onRateLimit?: (info: any) => void; recover?: () => void } | undefined;
 	let lastOnRateLimit: ((info: any) => void) | undefined;
 	let lastRateStatus: string | undefined;
 	let generation = 0;
@@ -255,6 +267,23 @@ export function createSession(deps: SessionDeps): RelaySession {
 		if (owed > 0) beginDrain();
 	}
 
+	/**
+	 * claude went on without a tool result Pi still owes it: it gave up on a parked call (its MCP client timed out or cancelled), or
+	 * it ended the turn. Its session no longer matches Pi's history, so it can never take that result: stop it now (no turn runs
+	 * on its own meanwhile) and let the result restart claude with a replay. A request already waiting on the call restarts at
+	 * once when nothing of it reached Pi yet; otherwise it fails instead of hanging.
+	 */
+	function abandonToolCalls(gen: number) {
+		if (gen !== generation) return;
+		markLost("missing-tool-call");
+		const waiting = active && !active.mapper.finished ? active : undefined;
+		void teardown("claude stopped waiting for this tool call");
+		if (!waiting) return;
+		if (waiting.recover && !waiting.mapper.started) { lost = undefined; waiting.recover(); return; }
+		waiting.mapper.fail("claude stopped waiting for a tool result (its MCP client gave up on the call); send the message again to continue");
+		waiting.settle();
+	}
+
 	/** Resumed process died (or answered with an error result) before it showed any sign of life: continue the request with the flattened replay. */
 	function failResume(gen: number): boolean {
 		const t = trial;
@@ -305,7 +334,11 @@ export function createSession(deps: SessionDeps): RelaySession {
 			if (draining && owed === 0) endDrain();
 			if (v.is_error && failResume(gen)) return;
 			if (trial && trial.gen === gen) trial.seen = true;
-			if (!active || active.mapper.finished) return;
+			if (!active || active.mapper.finished) {
+				// claude ended the turn while Pi still runs tools it asked for: it went on without their results.
+				if (requestsLeft === 0 && snapshot?.pendingToolCallIds.length && host?.pendingIds().some((id) => snapshot!.pendingToolCallIds.includes(id))) abandonToolCalls(gen);
+				return;
+			}
 			if (v.is_error) {
 				const text = redact(typeof v.result === "string" && v.result ? v.result : `claude returned ${v.subtype ?? "an error"}`);
 				active.mapper.fail(retryableRateLimitMessage(text, v, lastRateStatus));
@@ -362,6 +395,7 @@ export function createSession(deps: SessionDeps): RelaySession {
 		const gen = generation;
 		const h = deps.createHost(req.tools);
 		host = h; // tracked from creation, so a failure or abort below can close it
+		h.onDrop(() => abandonToolCalls(gen));
 		// Aborts and close() bump `generation` and have already torn this host down; otherwise tear it down here.
 		const release = () => (gen === generation ? teardown() : h.close().catch(() => {}));
 		try { await h.start(); } catch (e) { await release(); throw e; }
@@ -455,7 +489,8 @@ export function createSession(deps: SessionDeps): RelaySession {
 
 		let settle!: () => void;
 		const finished = new Promise<void>((r) => { settle = r; });
-		active = { mapper, settle, onRateLimit: req.onRateLimit };
+		const current: NonNullable<typeof active> = { mapper, settle, onRateLimit: req.onRateLimit };
+		active = current;
 		lastOnRateLimit = req.onRateLimit;
 		/** The turn was handed to claude (a user line written or tool results delivered): an abort has something to interrupt. */
 		let handedOff = false;
@@ -497,6 +532,14 @@ export function createSession(deps: SessionDeps): RelaySession {
 				handedOff = true;
 			} else {
 				const results = plan.results;
+				// If claude gives up on these calls before answering, restart for this same request instead of waiting for a turn that never comes.
+				current.recover = () => {
+					current.recover = undefined;
+					info.plan = "restart"; info.reason = "missing-tool-call"; info.resumed = false;
+					const p = planTurn(undefined, { config, messages: req.messages });
+					if (p.kind !== "restart") { mapper.fail("claude stopped waiting for a tool result"); settle(); return; }
+					startFlattened(p).catch((e) => { mapper.fail(`Claude relay failed to start: ${(e as Error).message}`); settle(); });
+				};
 				const deliver = () => { for (const r of results) host?.resolve(r.toolCallId, { content: r.content as any, isError: r.isError }); };
 				handedOff = true;
 				if (plan.then) {

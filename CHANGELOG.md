@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- A Pi tool that runs longer than 5 minutes (a native review, a CI wait, a subagent) is no longer cut by `claude`. `claude` aborts an HTTP MCP call that sends no response or progress for 5 minutes (`sent no response or progress for 300s; aborting`) even with `MCP_TOOL_TIMEOUT` set, because that variable is only the wall-clock limit. The relay now sets a per-call `timeout` of 24 hours in its MCP config and `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0`, and drops an inherited `CLAUDE_AUTO_BACKGROUND_TASKS`.
+- A Pi session no longer hangs forever after `claude` gives up on a tool call. Before, `claude` went on without the result: it answered the cut call with an error and ended its turn on its own. When Pi later delivered the result, it went to a call nobody waited for, and Pi waited for a reply that never came. Now the relay notices when `claude` stops waiting for a parked call: it closes the request, sends `notifications/cancelled`, or ends its turn while Pi still runs the tool. The relay then stops that `claude` at once, and the result restarts it with a transcript replay (restart reason `missing-tool-call`). A request already waiting on the call restarts within that same request, or fails with a message if part of its answer had already reached Pi.
+
 ## 0.1.4
 
 ### Fixed

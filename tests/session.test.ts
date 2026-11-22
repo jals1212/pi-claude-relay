@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSession, STEER_LEAD_MS, type TurnInfo, buildClaudeArgs, buildChildEnv, claudeCredential, toClaudeUserContent, type ClaudeProc, type SpawnOptions } from "../src/session.ts";
+import { createSession, STEER_LEAD_MS, type TurnInfo, buildClaudeArgs, buildChildEnv, mcpConfig, claudeCredential, toClaudeUserContent, type ClaudeProc, type SpawnOptions } from "../src/session.ts";
 import type { RelayEvent } from "../src/turn.ts";
 import type { PiMessage } from "../src/sync.ts";
 
@@ -54,8 +54,13 @@ class FakeHost {
 	expect(c: any) { this.expected.push(c); }
 	resolve(id: string, r: any) { this.resolved.push([id, r]); }
 	failAll(m: string) { this.failed.push(m); this.expected = []; }
-	/** Like the real host: expected calls with no delivered result yet. */
-	pendingIds() { return this.expected.map((c) => c.id).filter((id) => !this.resolved.some(([r]) => r === id)); }
+	/** Like the real host: expected calls with no delivered result yet (a dropped call is no longer pending). */
+	pendingIds() { return this.expected.map((c) => c.id).filter((id) => !this.resolved.some(([r]) => r === id) && !this.dropped.includes(id)); }
+	dropped: string[] = [];
+	private dropCb: (id: string) => void = () => {};
+	onDrop(cb: (id: string) => void) { this.dropCb = cb; }
+	/** Model claude giving up on a parked call (MCP idle timeout, cancellation). */
+	drop(id: string) { this.dropped.push(id); this.dropCb(id); }
 }
 
 const tools = [{ name: "read", description: "Read", parameters: { type: "object" } }];
@@ -1420,4 +1425,95 @@ test("an older steering line folded in a later tool round is not discarded; only
 	procs[0].text("s", "stray"); procs[0].emit(RESULT); await tick(); assert.equal(settled(ev4), false);
 	procs[0].text("b", "B-answer"); procs[0].emit(RESULT);
 	await p4; assert.equal(lastText(ev4), "B-answer");
+});
+
+// --- long tool calls: claude giving up on a parked call never hangs Pi (fix/long-tool-calls) ---
+const readResult = (id: string, text = "data"): PiMessage => ({ role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text }], isError: false, timestamp: 3 });
+
+test("claude giving up on a parked call stops it at once; the late result restarts with a replay instead of hanging", async () => {
+	const infos: TurnInfo[] = [];
+	const { session, procs, hosts } = setup({ onTurn: (i) => infos.push(structuredClone(i)) });
+	const e1 = await turn(session, [u("revisa")], () => procs[0].toolUse("m1", "toolu_long", "read", { path: "a" }));
+	assert.equal((e1.at(-1) as any).message.stopReason, "toolUse");
+	hosts[0].drop("toolu_long"); // 300 s later: claude's MCP client cut the call while Pi still runs the tool
+	assert.equal(procs[0].killed, true, "claude is stopped at once: no turn of its own runs without the result");
+	assert.equal(hosts[0].failed.length, 1, "other parked calls are answered");
+	const e2 = await turn(session, [u("revisa"), (e1.at(-1) as any).message, readResult("toolu_long", "approved")], () => procs[1].text("m2", "listo"));
+	assert.equal(procs.length, 2);
+	assert.equal(hosts[1].resolved.length, 0, "nothing is delivered into a call nobody waits for");
+	assert.match(procs[1].written[0].message.content[0].text, /<tool_result id="toolu_long" name="read">\napproved\n<\/tool_result>/);
+	assert.equal((e2.at(-1) as any).type, "done");
+	assert.equal((e2.at(-1) as any).message.content[0].text, "listo");
+	assert.deepEqual([infos[1].plan, infos[1].reason, infos[1].resumed], ["restart", "missing-tool-call", false]);
+});
+
+test("claude ending its turn while Pi still owes a tool result stops it; the result restarts instead of hanging", async () => {
+	const { session, procs, hosts } = setup();
+	const e1 = await turn(session, [u("revisa")], () => procs[0].toolUse("m1", "toolu_long", "read", { path: "a" }));
+	procs[0].text("m-stray", "the tool did not answer, I stop here"); // nobody listens: no active request
+	procs[0].emit({ type: "result", subtype: "success", is_error: false });
+	assert.equal(procs[0].killed, true);
+	const e2 = await turn(session, [u("revisa"), (e1.at(-1) as any).message, readResult("toolu_long")], () => procs[1].text("m2", "listo"));
+	assert.equal(procs.length, 2);
+	assert.equal(hosts[0].resolved.length, 0);
+	assert.equal((e2.at(-1) as any).message.content[0].text, "listo");
+});
+
+test("a normal result after the tool results were answered does not stop claude", async () => {
+	const { session, procs } = setup();
+	const e1 = await turn(session, [u("lee")], () => procs[0].toolUse("m1", "toolu_1", "read", { path: "a" }));
+	const e2 = await turn(session, [u("lee"), (e1.at(-1) as any).message, readResult("toolu_1")], () => procs[0].text("m2", "ok"));
+	procs[0].emit({ type: "result", subtype: "success", is_error: false });
+	assert.equal(procs[0].killed, false);
+	await turn(session, [u("lee"), (e1.at(-1) as any).message, readResult("toolu_1"), (e2.at(-1) as any).message, u("y?")], () => procs[0].text("m3", "b"));
+	assert.equal(procs.length, 1);
+});
+
+test("claude giving up while the results request waits for its answer restarts within that same request", async () => {
+	const infos: TurnInfo[] = [];
+	const { session, procs, hosts } = setup({ onTurn: (i) => infos.push(structuredClone(i)) });
+	const e1 = await turn(session, [u("lee")], () => procs[0].toolUse("m1", "toolu_1", "read", { path: "a" }));
+	const e2 = await turn(session, [u("lee"), (e1.at(-1) as any).message, readResult("toolu_1")], () => {
+		hosts[0].drop("toolu_1"); // the result was handed over just as claude's client cut the call
+		setImmediate(() => procs[1].text("m2", "recuperado"));
+	});
+	assert.equal(procs.length, 2);
+	assert.equal(procs[0].killed, true);
+	assert.match(procs[1].written[0].message.content[0].text, /<tool_result id="toolu_1" name="read">/);
+	assert.equal((e2.at(-1) as any).type, "done");
+	assert.equal((e2.at(-1) as any).message.content[0].text, "recuperado");
+	assert.deepEqual([infos[1].plan, infos[1].reason], ["restart", "missing-tool-call"]);
+});
+
+test("claude giving up after part of the answer reached Pi fails that request instead of hanging or duplicating it", async () => {
+	const { session, procs, hosts } = setup();
+	const e1 = await turn(session, [u("lee")], () => procs[0].toolUse("m1", "toolu_1", "read", { path: "a" }));
+	const e2 = await turn(session, [u("lee"), (e1.at(-1) as any).message, readResult("toolu_1")], () => {
+		procs[0].emit(MESSAGE_START);
+		hosts[0].drop("toolu_1");
+	});
+	const last = e2.at(-1) as any;
+	assert.equal(last.type, "error");
+	assert.match(last.error.errorMessage, /claude stopped waiting for a tool result/);
+	assert.equal(procs.length, 1, "no restart inside a request that already streamed");
+	assert.equal(procs[0].killed, true);
+});
+
+test("a drop reported by a host that was already replaced changes nothing", async () => {
+	const { session, procs, hosts } = setup();
+	const e1 = await turn(session, [u("lee")], () => procs[0].toolUse("m1", "toolu_1", "read", { path: "a" }));
+	hosts[0].drop("toolu_1");
+	await turn(session, [u("lee"), (e1.at(-1) as any).message, readResult("toolu_1")], () => procs[1].text("m2", "ok"));
+	hosts[0].drop("toolu_1");
+	assert.equal(procs[1].killed, false);
+});
+
+test("long Pi tools are not cut by claude's 5-minute MCP idle timer: per-server timeout and idle timer off", () => {
+	assert.deepEqual(mcpConfig("http://127.0.0.1:9/t"), { mcpServers: { pi: { type: "http", url: "http://127.0.0.1:9/t", timeout: 86400000 } } });
+	const env = buildChildEnv({ PATH: "/bin", CLAUDE_AUTO_BACKGROUND_TASKS: "1", CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: "1000", CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: "1" }, { kind: "oauth", value: "sk-ant-oat01-s" }, "/c");
+	assert.equal(env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT, "0");
+	assert.equal(env.MCP_TOOL_TIMEOUT, "86400000");
+	assert.equal("CLAUDE_AUTO_BACKGROUND_TASKS" in env, false, "claude must not move a parked Pi tool call to the background");
+	assert.equal("CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS" in env, false);
+	assert.equal(env.PATH, "/bin");
 });

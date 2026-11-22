@@ -346,3 +346,63 @@ test("a parked call whose client gave up is no longer pending, so the session ca
 		assert.deepEqual(host.pendingIds(), []);
 	});
 });
+
+const parkedCall = (host: McpHost, rpcId: number, toolUseId: string, signal?: AbortSignal) =>
+	fetch(host.url, { method: "POST", signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: rpcId, method: "tools/call", params: { name: "read", arguments: { path: "a" }, _meta: { "claudecode/toolUseId": toolUseId } } }) }).catch(() => undefined);
+const settleIo = () => new Promise((r) => setTimeout(r, 100));
+
+test("claude closing a parked call reports the drop with the Pi tool call id", async () => {
+	await withHost(async (host) => {
+		const drops: string[] = [];
+		host.onDrop((id) => drops.push(id));
+		host.expect({ type: "toolCall", id: "toolu_drop", name: "read", arguments: { path: "a" } });
+		const controller = new AbortController();
+		const call = parkedCall(host, 7, "toolu_drop", controller.signal);
+		await settleIo();
+		assert.deepEqual(drops, []);
+		controller.abort();
+		await call;
+		await settleIo();
+		assert.deepEqual(drops, ["toolu_drop"]);
+		assert.deepEqual(host.pendingIds(), []);
+	});
+});
+
+test("notifications/cancelled for a parked call drops it (202, no reply); another request id changes nothing", async () => {
+	await withHost(async (host) => {
+		const drops: string[] = [];
+		host.onDrop((id) => drops.push(id));
+		host.expect({ type: "toolCall", id: "toolu_a", name: "read", arguments: { path: "a" } });
+		const call = parkedCall(host, 7, "toolu_a");
+		await settleIo();
+		const other = await rpc(host, "notifications/cancelled", { requestId: 8, reason: "x" }, null);
+		assert.equal(other.status, 202);
+		assert.deepEqual([drops, host.pendingIds()], [[], ["toolu_a"]]);
+		const cancel = await rpc(host, "notifications/cancelled", { requestId: 7, reason: "MCP tool call timed out" }, null);
+		assert.equal(cancel.status, 202);
+		assert.equal(cancel.body, undefined);
+		assert.deepEqual([drops, host.pendingIds()], [["toolu_a"], []]);
+		host.resolve("toolu_a", { content: [{ type: "text", text: "late" }], isError: false });
+		assert.deepEqual(drops, ["toolu_a"], "a late result reports nothing more");
+		void call;
+	});
+});
+
+test("answered or failed calls never report a drop, even when the connection closes afterwards", async () => {
+	await withHost(async (host) => {
+		const drops: string[] = [];
+		host.onDrop((id) => drops.push(id));
+		host.expect({ type: "toolCall", id: "toolu_ok", name: "read", arguments: { path: "a" } });
+		host.expect({ type: "toolCall", id: "toolu_fail", name: "bash", arguments: { command: "x" } });
+		const ok = parkedCall(host, 1, "toolu_ok");
+		const fail = fetch(host.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "bash", arguments: { command: "x" }, _meta: { "claudecode/toolUseId": "toolu_fail" } } }) });
+		await settleIo();
+		host.resolve("toolu_ok", { content: [{ type: "text", text: "done" }], isError: false });
+		const okRes = await ok;
+		assert.equal((await okRes!.json()).result.content[0].text, "done");
+		host.failAll("Request was aborted");
+		assert.equal((await (await fail).json()).result.isError, true);
+		await settleIo();
+		assert.deepEqual(drops, []);
+	});
+});
