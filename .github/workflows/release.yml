@@ -19,7 +19,8 @@ on:
   push:
     tags: ['v*.*.*']
   # By hand, for a tag whose push started nothing: `gh workflow run release.yml --ref vX.Y.Z`.
-  # Run on a branch, the version check below fails and nothing is staged.
+  # Only for tags that contain this trigger (v0.1.0 and v0.1.1 do not). A ref that is
+  # not a tag is refused by the first step and nothing is staged.
   workflow_dispatch:
 
 permissions:
@@ -41,6 +42,7 @@ jobs:
       - name: The tag is the package's version
         id: which
         run: |
+          [ "$GITHUB_REF_TYPE" = tag ] || { echo "::error::$GITHUB_REF_NAME is not a tag"; exit 1; }
           version="${GITHUB_REF_NAME#v}"
           declared="$(node -p 'require("./package.json").version')"
           [ "$version" = "$declared" ] || { echo "::error::Tag $GITHUB_REF_NAME, package.json $declared"; exit 1; }
