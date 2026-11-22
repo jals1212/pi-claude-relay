@@ -327,3 +327,19 @@ test("a rewritten name that two offered tools share is not guessed: the turn fai
 	exact.mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "mcp__pi__a_b", input: {} }));
 	assert.equal((exact.events.at(-1) as any).partial.content[0].name, "a_b");
 });
+
+test("a rewritten name called without the prefix is skipped like any bare offered name", () => {
+	const { mapper, types } = strict(["a.b"]);
+	mapper.handle(start());
+	assert.equal(mapper.handle(toolStart({ type: "tool_use", id: "t1", name: "a_b", input: {} })), "continue");
+	assert.deepEqual(types(), ["start"]);
+	assert.equal(mapper.finished, false);
+});
+
+test("two offered tools that share a rewritten name are still reachable by their exact names", () => {
+	for (const name of ["a.b", "a b"]) {
+		const { events, mapper } = strict(["a.b", "a b"]);
+		mapper.handle(toolStart({ type: "tool_use", id: "t1", name: `mcp__pi__${name}`, input: {} }));
+		assert.equal((events.at(-1) as any).partial.content[0].name, name);
+	}
+});

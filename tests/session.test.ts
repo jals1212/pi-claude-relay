@@ -263,6 +263,9 @@ test("close kills the process and closes the host", async () => {
 test("buildClaudeArgs allows tools under the name claude gives them (characters outside letters, digits, _ and - become _)", () => {
 	const args = buildClaudeArgs({ model: "m", effort: "off", toolNames: ["read", "weird.name-x", "sp ace", "ñandú"], systemPromptFile: "s", mcpConfigFile: "c" });
 	assert.equal(args[args.indexOf("--allowedTools") + 1], "mcp__pi__read,mcp__pi__weird_name-x,mcp__pi__sp_ace,mcp__pi___and_");
+	// ordinary names are untouched
+	const plain = buildClaudeArgs({ model: "m", effort: "off", toolNames: ["a.b", "ok-1", "under_score"], systemPromptFile: "s", mcpConfigFile: "c" });
+	assert.equal(plain[plain.indexOf("--allowedTools") + 1], "mcp__pi__a_b,mcp__pi__ok-1,mcp__pi__under_score");
 });
 
 test("buildClaudeArgs isolates claude: no built-in tools, strict MCP, no settings, Pi system prompt from a file", () => {
