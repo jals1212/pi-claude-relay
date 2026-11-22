@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## 0.1.2
+
+No changes to the package itself: its code is the same as 0.1.1.
+
+### Changed
+
+- First release staged by the release workflow through npm trusted publishing, so the package carries a provenance statement. 0.1.0 and 0.1.1 were published by hand, without one.
+
 ## 0.1.1
 
 ### Fixed
