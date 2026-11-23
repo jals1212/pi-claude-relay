@@ -132,6 +132,22 @@ test("message_stop without a stop reason is an error, not done", () => {
 	assert.match((events.at(-1) as any).error.errorMessage, /stop reason/);
 });
 
+test("a stream cut after a partial tool call stays an error Pi retries", () => {
+	// The API stream can end (network drop, machine sleep) after a tool_use block began but before message_delta.
+	// Pi retries errors matching its premature-stream pattern `ended without` (pi-ai utils/retry.js) and drops the partial message.
+	const { events, mapper } = harness();
+	mapper.handle(start());
+	mapper.handle({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "t1", name: "mcp__pi__read", input: {} } });
+	mapper.handle({ type: "content_block_stop", index: 0 });
+	assert.equal(mapper.handle({ type: "message_stop" }), "done");
+	const last = events.at(-1) as any;
+	assert.equal(last.type, "error");
+	assert.equal(last.reason, "error");
+	assert.equal(last.error.stopReason, "error");
+	assert.equal(last.error.errorMessage, "Claude message ended without a stop reason");
+	assert.match(last.error.errorMessage, /ended without/i);
+});
+
 test("responseModel is set on the final message; a synthetic model name is not recorded", () => {
 	const run = (model: string) => {
 		const events: any[] = [];
