@@ -123,7 +123,7 @@ test("opted out: no login status", () => {
 
 // --- /claude-relay notify (S6) ---
 const STATE = (w: string, l: string) => `Claude relay notifications: warning ${w}, limit ${l}`;
-const USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats";
+const USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off]";
 
 function tmpSettings() {
 	const dir = mkdtempSync(join(tmpdir(), "relay-settings-"));
@@ -149,7 +149,9 @@ test("registers the claude-relay command with a description and argument complet
 		assert.equal(typeof cmd.handler, "function");
 		assert.equal(typeof cmd.description, "string");
 		const labels = (items: any) => (items ?? []).map((i: any) => i.value);
-		assert.deepEqual(labels(await cmd.getArgumentCompletions("")), ["notify", "stats"]);
+		assert.deepEqual(labels(await cmd.getArgumentCompletions("")), ["notify", "stats", "timing"]);
+		assert.deepEqual(labels(await cmd.getArgumentCompletions("timing ")), ["timing on", "timing off"]);
+		assert.ok(/timing/.test(cmd.description) && /notify/.test(cmd.description) && /stats/.test(cmd.description));
 		assert.deepEqual(labels(await cmd.getArgumentCompletions("st")), ["stats"]);
 		assert.equal(await cmd.getArgumentCompletions("stats "), null);
 		assert.deepEqual(labels(await cmd.getArgumentCompletions("notify ")), ["notify warning", "notify limit"]);
@@ -492,4 +494,116 @@ test("the exit hook closes sessions synchronously (transcripts are removed befor
 	adoptProvider({ closeAll: async () => { calls.push("async"); }, closeAllNow: () => { calls.push("now"); } }, proc);
 	exit!();
 	assert.deepEqual(calls, ["now"]);
+});
+
+// --- /claude-relay timing and the settings menu ---
+function timingRig(env: NodeJS.ProcessEnv = {}) {
+	const t = tmpSettings();
+	const timingFile = join(t.dir, "agent", "claude-relay-timing.jsonl");
+	const f = fakePi();
+	const infos: any[] = [];
+	const tools = [{ name: "read", description: "Read a file", parameters: { type: "object" } }];
+	const ai = { ...piAi, getCurrentSystemPrompt: () => "SECRET SYSTEM PROMPT", getCurrentTools: () => tools };
+	const provider = registerRelay(f.pi, {
+		piAi: ai as any, env, settingsFile: t.file, timingFile,
+		newSession: (_key, onTurn) => ({ async stream(_r, emit) { emit({ type: "done", reason: "stop", message: {} as any }); onTurn(infos.shift()); }, async close() {} }),
+	})!;
+	const notes: [string, string | undefined][] = [];
+	const ctx = { ui: { notify: (m: string, ty?: string) => notes.push([m, ty]) } };
+	const run = (args: string) => f.commands["claude-relay"].handler(args, ctx);
+	const ask = () => provider.streamSimple(claudeModel, { messages: [{ role: "system", content: "s" }, { role: "user", content: "TOP SECRET USER TEXT", timestamp: 1 }, { role: "assistant", content: [], timestamp: 2 }] } as any, { sessionId: "main", apiKey: "sk-ant-oat01-X" } as any);
+	const info = () => ({ plan: "send", resumed: false, usage: U(1, 9, 0, 0), stopReason: "stop", timing: { model: "claude-sonnet-5-5", firstLine: 40, messageStart: 50, firstText: 70, stop: 90, settle: 91 } });
+	return { ...f, t, timingFile, infos, notes, ctx, run, ask, info, provider };
+}
+
+test("/claude-relay timing: off by default; on persists with the log path; off persists; the file is only read from the settings", async () => {
+	const r = timingRig();
+	try {
+		await r.run("timing");
+		assert.deepEqual(r.notes.at(-1), ["Claude relay timing: off", "info"]);
+		assert.equal(existsSync(r.t.file), false);
+		await r.run("timing on");
+		assert.deepEqual(r.notes.at(-1), [`Claude relay timing: on (${r.timingFile})`, "info"]);
+		assert.deepEqual(JSON.parse(readFileSync(r.t.file, "utf8")), { timing: true });
+		assert.equal(statSync(r.t.file).mode & 0o777, 0o600);
+		await r.run("  TIMING   status".replace("status", ""));
+		assert.deepEqual(r.notes.at(-1), [`Claude relay timing: on (${r.timingFile})`, "info"]);
+		await r.run("timing off");
+		assert.deepEqual(r.notes.at(-1), ["Claude relay timing: off", "info"]);
+		assert.deepEqual(JSON.parse(readFileSync(r.t.file, "utf8")), { timing: false });
+	} finally { r.t.done(); }
+});
+
+test("/claude-relay timing with an invalid argument shows the usage and leaves the file alone; notify keeps working next to timing", async () => {
+	const r = timingRig();
+	try {
+		await r.run("timing maybe");
+		await r.run("timing on now");
+		await r.run("timing on off");
+		assert.deepEqual(r.notes, [[USAGE, "warning"], [USAGE, "warning"], [USAGE, "warning"]]);
+		assert.equal(existsSync(r.t.file), false);
+		await r.run("timing on");
+		await r.run("notify limit off");
+		assert.equal(r.notes.at(-1)![0], STATE("on", "off"));
+		assert.deepEqual(JSON.parse(readFileSync(r.t.file, "utf8")), { timing: true, notify: { warning: true, limit: false } });
+	} finally { r.t.done(); }
+});
+
+test("timing on: a settled turn appends one content-free JSON line asynchronously and the status shows a summary; off writes nothing", async () => {
+	const r = timingRig();
+	try {
+		await r.handlers.session_start({ type: "session_start" }, { sessionManager: { getSessionId: () => "main" } });
+		r.infos.push(r.info());
+		r.ask(); await flush(); await flush();
+		assert.equal(existsSync(r.timingFile), false, "off by default: nothing written");
+		await r.run("timing on");
+		r.infos.push(r.info());
+		r.ask(); await flush(); await flush();
+		for (let i = 0; i < 50 && !existsSync(r.timingFile); i++) await new Promise((res) => setTimeout(res, 10));
+		const text = readFileSync(r.timingFile, "utf8");
+		const lines = text.trim().split("\n");
+		assert.equal(lines.length, 1);
+		const rec = JSON.parse(lines[0]);
+		assert.equal(rec.output, 9); assert.equal(rec.firstText, 70); assert.equal(rec.model, "claude-sonnet-5-5");
+		for (const secret of ["TOP SECRET", "SECRET SYSTEM", "sk-ant", "read"]) assert.equal(text.includes(secret), false, secret);
+		assert.equal(statSync(r.timingFile).mode & 0o777, 0o600);
+		await r.run("timing");
+		assert.match(r.notes.at(-1)![0], new RegExp(`^Claude relay timing: on \\(.*claude-relay-timing\\.jsonl\\)\\nlast 1 request · median / p90\\nfirst event: 40 / 40 ms \\(n=1\\)\\nfirst text or tool call: 70 / 70 ms \\(n=1\\)\\ntotal: 91 / 91 ms \\(n=1\\)$`));
+		await r.run("timing off");
+		r.infos.push(r.info());
+		r.ask(); await flush(); await flush(); await new Promise((res) => setTimeout(res, 30));
+		assert.equal(readFileSync(r.timingFile, "utf8"), text, "off again: no new line");
+	} finally { r.t.done(); }
+});
+
+test("/claude-relay without arguments: opens the settings menu in an interactive UI, text usage otherwise; text subcommands never open it", async () => {
+	const t = tmpSettings();
+	try {
+		const f = fakePi();
+		let opened = 0;
+		let items: any[] = [];
+		const lib = {
+			SettingsList: class { onChange: any; constructor(i: any[], _m: number, _t: any, onChange: any) { this.onChange = onChange; items = i; opened++; (this.constructor as any).last = this; } render() { return []; } invalidate() {} handleInput() {} },
+			getSettingsListTheme: () => ({}), truncateToWidth: (s: string) => s,
+		};
+		registerRelay(f.pi, { piAi: piAi as any, env: {}, settingsFile: t.file, loadTuiLib: async () => lib as any });
+		const notes: any[] = [];
+		const ui = { notify: (m: string, ty?: string) => notes.push([m, ty]), custom: async (factory: any) => { factory({ requestRender() {} }, {}, {}, () => {}); } };
+		const handler = f.commands["claude-relay"].handler;
+		await handler("", { ui, hasUI: true, mode: "tui" });
+		assert.equal(opened, 1);
+		assert.deepEqual(notes, []);
+		(lib.SettingsList as any).last.onChange("timing", "on");
+		assert.deepEqual(JSON.parse(readFileSync(t.file, "utf8")), { timing: true });
+		for (const args of ["notify", "stats", "timing"]) await handler(args, { ui, hasUI: true, mode: "tui" });
+		assert.equal(opened, 1, "text subcommands stay text");
+		assert.equal(notes.length, 3);
+		// print / RPC / no custom(): the text behavior, never a throw
+		await handler("", { ui: { notify: ui.notify }, hasUI: false, mode: "print" });
+		await handler("", { ui, hasUI: true, mode: "rpc" });
+		await handler("", undefined);
+		assert.equal(opened, 1);
+		assert.deepEqual(notes.slice(3), [[USAGE, "warning"], [USAGE, "warning"]]);
+		assert.ok(items.length >= 3);
+	} finally { t.done(); }
 });

@@ -73,6 +73,27 @@ export interface TurnInfo {
 	/** Usage of the turn's final assistant message. */
 	usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	stopReason?: string;
+	/** Present only while latency timing is on (`SessionDeps.timing`). */
+	timing?: TurnTiming;
+}
+
+/** Marks of one request, in ms since `stream()` was called (monotonic clock). A mark that never happened is absent. */
+export interface TurnTiming {
+	model: string;
+	/** A claude process was started or restarted for this request. */
+	spawn?: number;
+	/** The first line claude wrote for this request (any type except rate-limit notices). */
+	firstLine?: number;
+	/** The mapper's `start` event (claude's `message_start`). */
+	messageStart?: number;
+	firstThinking?: number;
+	firstText?: number;
+	/** First tool call start. */
+	firstTool?: number;
+	/** The terminal event (`done` / `error`) was pushed. */
+	stop?: number;
+	/** `stream()` finished its work for the request. */
+	settle: number;
 }
 
 export interface SessionDeps {
@@ -80,6 +101,10 @@ export interface SessionDeps {
 	createHost: (tools: PiTool[]) => McpHost;
 	api: string; provider: string;
 	now?: () => number;
+	/** Whether to take latency marks for a request; read once per `stream()`. Off (undefined) costs one call per request and nothing per event. */
+	timing?: () => boolean;
+	/** Monotonic millisecond clock for the marks; defaults to `performance.now`. */
+	clock?: () => number;
 	onRateLimit?: (info: any) => void;
 	/** Called once per `stream()` that reached a plan, when its turn settles. Observer errors are ignored. */
 	onTurn?: (info: TurnInfo) => void;
@@ -169,13 +194,28 @@ const defaultTimer = (callback: () => void, ms: number) => {
 	return () => clearTimeout(t);
 };
 
+/** Records the first time each kind of output event is pushed to Pi. */
+function markEvent(m: Mark, type: RelayEvent["type"]) {
+	const marks = m.marks;
+	switch (type) {
+		case "start": if (marks.messageStart === undefined) marks.messageStart = m.at(); break;
+		case "thinking_delta": if (marks.firstThinking === undefined) marks.firstThinking = m.at(); break;
+		case "text_delta": if (marks.firstText === undefined) marks.firstText = m.at(); break;
+		case "toolcall_start": if (marks.firstTool === undefined) marks.firstTool = m.at(); break;
+		case "done": case "error": if (marks.stop === undefined) marks.stop = m.at(); break;
+	}
+}
+
+/** Latency marks of one request (only allocated while timing is on). `at()` is ms since the request started. */
+interface Mark { marks: Omit<TurnTiming, "model" | "settle">; at: () => number }
+
 export function createSession(deps: SessionDeps): RelaySession {
 	let proc: ClaudeProc | undefined;
 	let host: McpHost | undefined;
 	/** What claude's session knows. Kept when the process is lost, so a restart can resume the session; cleared only when a flattened replay starts a new one. */
 	let snapshot: Snapshot | undefined;
 	/** `recover`: restart claude for this same request; set while the request only waits for parked tool calls to be answered. */
-	let active: { mapper: TurnMapper; settle: () => void; onRateLimit?: (info: any) => void; recover?: () => void } | undefined;
+	let active: { mapper: TurnMapper; settle: () => void; onRateLimit?: (info: any) => void; recover?: () => void; mark?: Mark } | undefined;
 	let lastOnRateLimit: ((info: any) => void) | undefined;
 	let lastRateStatus: string | undefined;
 	let generation = 0;
@@ -297,6 +337,8 @@ export function createSession(deps: SessionDeps): RelaySession {
 	function onLine(gen: number, v: any) {
 		if (gen !== generation) return;
 		procSeen = true;
+		const mark = active?.mark;
+		if (mark && mark.marks.firstLine === undefined && v?.type !== "rate_limit_event") mark.marks.firstLine = mark.at();
 		// A replayed user line is only claude echoing its input, not a sign that the resumed session loaded.
 		if (v?.type !== "result" && v?.type !== "user" && trial && trial.gen === gen) trial.seen = true;
 		if (v?.type === "system" && v.subtype === "init") {
@@ -438,8 +480,13 @@ export function createSession(deps: SessionDeps): RelaySession {
 	};
 
 	async function stream(req: StreamRequest, emit: (e: RelayEvent) => void) {
+		let mark: Mark | undefined;
+		try {
+			if (deps.timing?.()) { const clock = deps.clock ?? (() => performance.now()); const t0 = clock(); mark = { marks: {}, at: () => clock() - t0 }; }
+		} catch { /* timing never breaks a request */ }
 		const mapper = createTurnMapper({ api: deps.api, provider: deps.provider, model: req.model, toolPrefix: TOOL_PREFIX, toolNames: req.tools.map((t) => t.name), now: deps.now, applyCost: req.cost, emit: (e) => {
 			if (e.type === "toolcall_end") host?.expect(e.toolCall);
+			if (mark) markEvent(mark, e.type);
 			emit(e);
 		} });
 		if (req.signal?.aborted) {
@@ -492,7 +539,7 @@ export function createSession(deps: SessionDeps): RelaySession {
 
 		let settle!: () => void;
 		const finished = new Promise<void>((r) => { settle = r; });
-		const current: NonNullable<typeof active> = { mapper, settle, onRateLimit: req.onRateLimit };
+		const current: NonNullable<typeof active> = { mapper, settle, onRateLimit: req.onRateLimit, mark };
 		active = current;
 		lastOnRateLimit = req.onRateLimit;
 		// Only a rate-limit state seen for this request may mark its error as an exhausted quota: a stale `rejected` must not stop Pi from retrying a later, unrelated error.
@@ -513,6 +560,7 @@ export function createSession(deps: SessionDeps): RelaySession {
 		const failStart = () => { mapper.fail(req.signal?.aborted ? "Request was aborted" : "Claude relay session closed", "aborted"); settle(); };
 		const startFlattened = async (p: Extract<Plan, { kind: "restart" }>) => {
 			if (!(await spawnFresh(req, credential))) { failStart(); return; }
+			if (mark) mark.marks.spawn = mark.at();
 			const replay = p.replay.length ? [{ type: "text", text: renderTranscript(p.replay) }] : [];
 			const input = p.input.kind === "user" ? toClaudeUserContent(p.input.message.content) : [{ type: "text", text: CONTINUE }];
 			send(proc!, [...replay, ...input]);
@@ -524,6 +572,7 @@ export function createSession(deps: SessionDeps): RelaySession {
 				const restartingPlan = plan;
 				if (resumeId) {
 					if (await spawnFresh(req, credential, resumeId)) {
+						if (mark) mark.marks.spawn = mark.at();
 						trial = { gen: generation, seen: false, fallback: () => {
 							info.resumed = false;
 							startFlattened(restartingPlan).catch((e) => { mapper.fail(`Claude relay failed to start: ${(e as Error).message}`); settle(); });
@@ -565,6 +614,7 @@ export function createSession(deps: SessionDeps): RelaySession {
 		}
 
 		await finished;
+		const settleAt = mark?.at();
 		req.signal?.removeEventListener("abort", onAbort);
 		if (active?.mapper === mapper) active = undefined;
 
@@ -580,7 +630,7 @@ export function createSession(deps: SessionDeps): RelaySession {
 		}
 		if (deps.onTurn) {
 			const { input, output, cacheRead, cacheWrite } = m.usage;
-			try { deps.onTurn({ ...info, usage: { input, output, cacheRead, cacheWrite }, stopReason: m.stopReason }); } catch { /* an observer must not break the turn */ }
+			try { deps.onTurn({ ...info, usage: { input, output, cacheRead, cacheWrite }, stopReason: m.stopReason, ...(mark && settleAt !== undefined ? { timing: { model: req.model, ...mark.marks, settle: settleAt } } : {}) }); } catch { /* an observer must not break the turn */ }
 		}
 	}
 

@@ -56,6 +56,16 @@ Thinking levels map to `claude --effort`, and Claude's thinking reaches Pi as su
 
 All are optional. Which login is used is never configured: it is the Anthropic login of the Pi space.
 
+### Settings menu
+
+`/claude-relay` with no arguments opens a settings menu in the style of Pi's `/settings` (Enter or Space toggles, Esc closes). Each change is saved at once, per Pi space, exactly like the text commands below:
+
+- **Usage warning pop-up** and **Usage limit pop-up** (see [Notifications](#notifications)),
+- **Latency timing** (see [Latency timing](#latency-timing); its description shows the log file),
+- read-only views of the **Prompt-cache stats** and of the **Latency summary**.
+
+Without an interactive terminal UI (print, JSON or RPC mode) `/claude-relay` with no arguments prints the usage line instead. The text subcommands (`notify`, `stats`, `timing`) work everywhere and never open the menu. The menu loads `@earendil-works/pi-tui` from Pi at the moment it opens; if that fails the text behavior is used.
+
 ### Notifications
 
 The relay shows two pop-ups when Claude's quota changes: a **warning** when you approach a limit (`Claude usage warning…`) and an error when the **limit** is reached (`Claude usage limit reached…`). Each can be switched off on its own with the `/claude-relay` command in Pi (both are on by default):
@@ -85,6 +95,32 @@ cache warm requests answered locally: 3 · one-off requests: 1
 - **cache warm requests** are Pi's idle cache-warming requests, answered locally without reaching `claude`; **one-off requests** are turns of throwaway sessions (compaction and summaries), which are kept out of the other figures.
 
 Set `PI_CLAUDE_RELAY_DEBUG_LOG=/path/to/file` to also append one JSON line per settled turn (`t`, `session` = first 8 hex of the sha256 of the Pi session id, `plan`, `reason`, `stopReason`, `usage`, `systemPromptHash`, `toolsHash`, `messages`). The file is created with mode `0600` and never contains prompt text, tool arguments, credentials or the MCP URL; write errors are ignored.
+
+### Latency timing
+
+Pi's session log records only the total duration of a request. To see where the time goes (starting `claude`, time to the first token), switch on timing; it is **off by default**:
+
+```
+/claude-relay timing          # state, log file and a summary of this process's requests
+/claude-relay timing on       # start recording
+/claude-relay timing off      # stop
+```
+
+The switch is saved per Pi space in `<agent home>/claude-relay-settings.json` (`{ "timing": true }`; a missing or unreadable file or field means off, and `notify` is kept). While it is on, each settled request appends **one JSON line** to `<agent home>/claude-relay-timing.jsonl` (created with mode `0600`). Marks are milliseconds since the request started, taken with a monotonic clock:
+
+| Field | Meaning |
+| --- | --- |
+| `spawn` | a `claude` process was started or restarted for this request (absent when the live one was reused); `plan` and `reason` say which, with the same restart reasons as `stats` |
+| `firstLine` | first line `claude` wrote for the request |
+| `messageStart` | the response started (`message_start`) |
+| `firstThinking`, `firstText`, `firstTool` | first thinking delta, first text delta, first tool call |
+| `stop`, `settle` | the message ended; the request was finished |
+
+plus `t` (wall-clock ms), `session` (first 8 hex of the sha256 of the Pi session id), `model`, `stopReason` and `output` (output tokens); `throwaway` marks one-off requests (compaction, summaries). The file never contains prompt text, tool names or arguments, credentials, URLs or paths.
+
+`/claude-relay timing` also summarizes the last 500 requests of this Pi process (normal turns that finished without an error): count, median and p90 of the first line, first thinking, first text or tool call, and the total.
+
+There is no measurable cost: when it is off, a request pays one boolean check and nothing per streamed event. When it is on, the marks live in memory and the line is written after the request settled, with an asynchronous append that the turn never waits for; write errors are ignored.
 
 ## How it works
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, statSync, symlinkSync, lstatSync, chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSettings, DEFAULT_NOTIFY } from "../src/settings.ts";
+import { createSettings, DEFAULT_NOTIFY, relayArgumentCompletions } from "../src/settings.ts";
 
 test("missing file → both notifications on; load never throws", () => {
 	const dir = mkdtempSync(join(tmpdir(), "relay-settings-"));
@@ -95,3 +95,47 @@ test("a symlinked settings file is never written through; the write is refused",
 	assert.deepEqual(readdirSync(dir).sort(), ["s.json", "target.json"]);
 	assert.deepEqual(s.notify(), { warning: true, limit: false });
 }));
+
+test("timing is off by default; a missing, corrupt or non-boolean field means off", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	assert.equal(createSettings(file).timing(), false);
+	writeFileSync(file, "garbage");
+	assert.equal(createSettings(file).timing(), false);
+	for (const v of ["on", 1, null, "true", {}]) { writeFileSync(file, JSON.stringify({ timing: v })); assert.equal(createSettings(file).timing(), false, String(v)); }
+	writeFileSync(file, JSON.stringify({ timing: true }));
+	assert.equal(createSettings(file).timing(), true);
+}));
+
+test("setTiming persists, is read back by a new store, and keeps notify and unrelated keys; setNotify keeps timing", () => inTmp((dir) => {
+	const file = join(dir, "nested", "s.json");
+	writeFileSync(join(dir, "other.json"), "{}");
+	const s = createSettings(file);
+	assert.equal(s.setTiming(true), true);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { timing: true });
+	assert.equal(statSync(file).mode & 0o777, 0o600);
+	assert.equal(createSettings(file).timing(), true);
+	assert.equal(s.setNotify("limit", false), true);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { timing: true, notify: { warning: true, limit: false } });
+	assert.equal(s.setTiming(false), true);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { timing: false, notify: { warning: true, limit: false } });
+	assert.deepEqual(createSettings(file).notify(), { warning: true, limit: false });
+	writeFileSync(file, JSON.stringify({ other: { keep: 1 }, notify: { warning: false, limit: true } }));
+	assert.equal(s.setTiming(true), true);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { other: { keep: 1 }, notify: { warning: false, limit: true }, timing: true });
+}));
+
+test("a failed timing write reports false and applies in memory until restart", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	mkdirSync(file);
+	const s = createSettings(file);
+	assert.equal(s.setTiming(true), false);
+	assert.equal(s.timing(), true);
+	assert.deepEqual(readdirSync(dir), ["s.json"]);
+}));
+
+test("completions offer timing and its on/off", () => {
+	assert.deepEqual(relayArgumentCompletions("")?.map((i) => i.value), ["notify", "stats", "timing"]);
+	assert.deepEqual(relayArgumentCompletions("ti")?.map((i) => i.value), ["timing"]);
+	assert.deepEqual(relayArgumentCompletions("timing ")?.map((i) => i.value), ["timing on", "timing off"]);
+	assert.equal(relayArgumentCompletions("timing on "), null);
+});

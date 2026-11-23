@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## Unreleased
 
+### Added
+
+- `/claude-relay` with no arguments opens a settings menu in the style of Pi's `/settings`: the two usage pop-ups and latency timing as on/off toggles that are saved at once, plus read-only views of the prompt-cache stats and the latency summary. Without an interactive UI it prints the usage line as before; `notify`, `stats` and `timing` keep working as text commands. The menu loads `@earendil-works/pi-tui` lazily, so the package now declares it as an optional peer dependency.
+- Opt-in latency timing: `/claude-relay timing [on|off]` (off by default, saved per Pi space as `timing` in `claude-relay-settings.json`). While on, each settled request appends one content-free JSON line (marks in ms: process start, first `claude` line, first thinking, first text or tool call, stop, settle, plus model, output tokens, stop reason and restart reason) to `claude-relay-timing.jsonl` next to the settings, written asynchronously after the request. `/claude-relay timing` shows the state and the median and p90 of the last 500 requests. Off costs one boolean check per request.
+
 ### Fixed
 
 - An exhausted Claude usage window (the 5-hour or weekly limit) is no longer retried by Pi. The relay worded it `429 rate limit: …`, which Pi retries with a backoff of at most a minute, so every hit started `claude` again 7–9 times in under a minute for a limit that resets in hours. It is now worded `429 quota exceeded: …`, which Pi fails at once; transient rate limits keep the retryable `429 rate limit: …` wording. Only a `rejected` rate-limit event seen for the same request counts: one left over from an earlier request no longer marks a later, unrelated error.

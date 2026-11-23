@@ -84,14 +84,14 @@ class ManualTimers {
 	fire() { for (const t of this.live()) { t.cancelled = true; t.cb(); } }
 }
 
-function setup(hooks: { spawnError?: Error; prepareHost?: (h: FakeHost) => void; onTurn?: (info: TurnInfo) => void; timers?: ManualTimers; removeTranscripts?: (ids: string[]) => void } = {}) {
+function setup(hooks: { spawnError?: Error; prepareHost?: (h: FakeHost) => void; onTurn?: (info: TurnInfo) => void; timers?: ManualTimers; removeTranscripts?: (ids: string[]) => void; timing?: () => boolean; clock?: () => number } = {}) {
 	const procs: FakeProc[] = [];
 	const hosts: FakeHost[] = [];
 	const session = createSession({
 		spawn: (o) => { if (hooks.spawnError) throw hooks.spawnError; const p = new FakeProc(o); procs.push(p); return p; },
 		createHost: (t) => { const h = new FakeHost(t); hooks.prepareHost?.(h); hosts.push(h); return h as any; },
 		api: "anthropic-messages", provider: "anthropic", now: () => 5, onTurn: hooks.onTurn,
-		setTimer: hooks.timers?.set, removeTranscripts: hooks.removeTranscripts,
+		setTimer: hooks.timers?.set, removeTranscripts: hooks.removeTranscripts, timing: hooks.timing, clock: hooks.clock,
 	});
 	return { session, procs, hosts };
 }
@@ -1581,4 +1581,87 @@ test("after a drop the restart reason `missing-tool-call` is reported once; late
 	procs[1].emit({ type: "result", subtype: "success", is_error: false });
 	await turn(session, [...history, (e2.at(-1) as any).message, u("sigue")], () => procs[1].text("m3", "b"));
 	assert.deepEqual(infos.map((i) => [i.plan, i.reason]), [["spawn", undefined], ["restart", "missing-tool-call"], ["send", undefined]]);
+});
+
+// --- latency timing (opt-in) ---
+const sse = (p: FakeProc, event: any) => p.emit({ type: "stream_event", event });
+
+test("timing on: one settled turn reports monotonic marks from start to settle, plus model, output tokens and stop reason, and no prompt text", async () => {
+	let now = 100;
+	const infos: TurnInfo[] = [];
+	const { session, procs } = setup({ timing: () => true, clock: () => now, onTurn: (i) => infos.push(structuredClone(i)) });
+	await turn(session, [u("SECRET prompt text")], () => {
+		const p = procs[0];
+		now = 130; p.emit({ type: "system", subtype: "init", session_id: UUID_X });
+		now = 140; sse(p, { type: "message_start", message: { id: "m1", usage: { input_tokens: 1 } } });
+		now = 150; sse(p, { type: "content_block_start", index: 0, content_block: { type: "thinking" } });
+		now = 160; sse(p, { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "hmm" } });
+		now = 170; sse(p, { type: "content_block_stop", index: 0 });
+		sse(p, { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } });
+		now = 180; sse(p, { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "a" } });
+		now = 190; sse(p, { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "b" } });
+		sse(p, { type: "content_block_stop", index: 1 });
+		sse(p, { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 7 } });
+		now = 200; sse(p, { type: "message_stop" });
+		now = 205;
+	});
+	assert.equal(infos.length, 1);
+	const t = infos[0].timing!;
+	assert.deepEqual(t, { model: "claude-sonnet-5-5", spawn: 0, firstLine: 30, messageStart: 40, firstThinking: 60, firstText: 80, stop: 100, settle: 105 });
+	assert.equal(infos[0].stopReason, "stop");
+	assert.equal(infos[0].usage?.output, 7);
+	assert.equal(infos[0].plan, "spawn");
+	const marks = [t.spawn, t.firstLine, t.messageStart, t.firstThinking, t.firstText, t.stop, t.settle] as number[];
+	assert.deepEqual([...marks].sort((a, b) => a - b), marks, "marks never go backwards");
+	assert.equal(JSON.stringify(infos[0]).includes("SECRET"), false);
+});
+
+test("timing on: a tool-call turn marks the first tool call and never a text mark; a rate-limit notice is not the first event", async () => {
+	let now = 0;
+	const infos: TurnInfo[] = [];
+	const { session, procs } = setup({ timing: () => true, clock: () => now, onTurn: (i) => infos.push(structuredClone(i)) });
+	await turn(session, [u("go")], () => {
+		now = 10; procs[0].emit({ type: "rate_limit_event", rate_limit_info: { status: "allowed" } });
+		now = 20; procs[0].toolUse("m1", "t1", "read", { path: "/secret/path" });
+		now = 25;
+	});
+	const t = infos[0].timing!;
+	assert.equal(t.firstLine, 20);
+	assert.equal(t.firstTool, 20);
+	assert.equal(t.firstText, undefined);
+	assert.equal(infos[0].stopReason, "toolUse");
+	assert.equal(JSON.stringify(t).includes("secret"), false);
+});
+
+test("timing on: a restart reports its category and the spawn mark", async () => {
+	let now = 0;
+	const infos: TurnInfo[] = [];
+	const { session, procs } = setup({ timing: () => true, clock: () => now, onTurn: (i) => infos.push(structuredClone(i)) });
+	const e1 = await turn(session, [u("hola")], () => procs[0].text("m1", "a"));
+	procs[0].emit({ type: "result", subtype: "success", is_error: false });
+	await turn(session, [u("hola"), (e1.at(-1) as any).message, u("y?")], () => procs[1].text("m2", "b"), { model: "claude-opus-5-5" });
+	assert.equal(infos[1].plan, "restart");
+	assert.equal(infos[1].reason, "model");
+	assert.equal(infos[1].timing?.model, "claude-opus-5-5");
+	assert.equal(typeof infos[1].timing?.spawn, "number");
+});
+
+test("timing off (default): no mark is taken, the clock is never read and TurnInfo has no timing key", async () => {
+	let clockCalls = 0;
+	const infos: TurnInfo[] = [];
+	for (const timing of [undefined, () => false]) {
+		const { session, procs } = setup({ timing, clock: () => { clockCalls++; return 0; }, onTurn: (i) => infos.push(structuredClone(i)) });
+		await turn(session, [u("hola")], () => procs[0].text("m1", "a"));
+	}
+	assert.equal(clockCalls, 0);
+	assert.equal(infos.length, 2);
+	for (const i of infos) assert.equal("timing" in i, false);
+});
+
+test("timing: a throwing timing switch or clock never breaks the turn", async () => {
+	const infos: TurnInfo[] = [];
+	const a = setup({ timing: () => { throw new Error("boom"); }, onTurn: (i) => infos.push(structuredClone(i)) });
+	const events = await turn(a.session, [u("hola")], () => a.procs[0].text("m1", "a"));
+	assert.equal(events.at(-1)?.type, "done");
+	assert.equal("timing" in infos[0], false);
 });

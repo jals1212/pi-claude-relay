@@ -12,6 +12,8 @@ import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createSettings, relayArgumentCompletions, runRelayCommand } from "./settings.ts";
+import { createTiming } from "./timing.ts";
+import { openRelayMenu, type TuiLib } from "./menu.ts";
 import { API, PROVIDER, providerConfig, relayEnabled } from "./config.ts";
 
 export interface RegisterDeps {
@@ -22,6 +24,10 @@ export interface RegisterDeps {
 	configDir?: string;
 	/** Per-space relay settings file; defaults to `<agent home>/claude-relay-settings.json`. */
 	settingsFile?: string;
+	/** Latency timing log; defaults to `<agent home>/claude-relay-timing.jsonl`. */
+	timingFile?: string;
+	/** Test seam: replaces the pi-tui loader of the `/claude-relay` menu. */
+	loadTuiLib?: () => Promise<TuiLib>;
 	/** Test seam: replaces the claude-backed session factory. */
 	newSession?: (key: string, onTurn: (info: TurnInfo) => void) => RelaySession;
 }
@@ -72,18 +78,24 @@ export function registerRelay(pi: Pick<ExtensionAPI, "registerProvider" | "on" |
 	const configDir = deps.configDir ?? join(agentHome, "claude-relay");
 	const settings = createSettings(deps.settingsFile ?? join(agentHome, "claude-relay-settings.json"));
 	sweepStaleTranscripts(configDir, STALE_TRANSCRIPT_MS);
+	const timing = createTiming({ file: deps.timingFile ?? join(agentHome, "claude-relay-timing.jsonl"), enabled: () => settings.timing() });
+	const writeDebugLog = debugLogWriter(env);
 	const provider = createRelayProvider({
 		piAi: deps.piAi,
 		cwd: deps.cwd ?? (() => process.cwd()),
-		newSession: deps.newSession ?? ((_key, onTurn) => createSession({ spawn: (o) => spawnClaude(o, undefined, configDir), removeTranscripts: (ids) => removeTranscriptsLater(configDir, ids), createHost: (tools) => createMcpHost({ tools }), api: API, provider: PROVIDER, onTurn })),
-		onTurn: debugLogWriter(env),
+		newSession: deps.newSession ?? ((_key, onTurn) => createSession({ spawn: (o) => spawnClaude(o, undefined, configDir), removeTranscripts: (ids) => removeTranscriptsLater(configDir, ids), createHost: (tools) => createMcpHost({ tools }), api: API, provider: PROVIDER, onTurn, timing: () => settings.timing() })),
+		onTurn: (report) => { writeDebugLog(report); timing.record(report); },
 	});
 	pi.registerProvider(PROVIDER, providerConfig(provider.streamSimple) as any);
 	pi.on("after_provider_response", createRateLimitHandler({ notifications: () => settings.notify() }) as any);
 	pi.registerCommand("claude-relay", {
-		description: "Claude relay settings and prompt-cache stats: /claude-relay notify [warning|limit] [on|off] | stats",
+		description: "Claude relay settings menu (no arguments), prompt-cache stats and latency timing: /claude-relay [notify [warning|limit] [on|off] | stats | timing [on|off]]",
 		getArgumentCompletions: relayArgumentCompletions,
-		handler: async (args, ctx) => { runRelayCommand(args, settings, ctx?.ui as any, provider.stats); },
+		handler: async (args, ctx) => {
+			// No arguments in an interactive Pi: the settings menu; anywhere else (or if it cannot open) the text command.
+			if (!args.trim() && await openRelayMenu(ctx as any, { settings, stats: provider.stats, timing, loadLib: deps.loadTuiLib })) return;
+			runRelayCommand(args, settings, ctx?.ui as any, provider.stats, timing);
+		},
 	});
 	pi.on("session_start", (_event, ctx) => {
 		// Only Pi's own session ids keep a claude process alive; compaction and summaries use throwaway ids.

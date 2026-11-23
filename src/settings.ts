@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { statsText, type Stats } from "./stats.ts";
+import { timingStateText, type Timing } from "./timing.ts";
 
 export interface NotifySettings {
 	/** Pop-up for the approaching-limit warning ("Claude usage warning…"). */
@@ -33,11 +34,20 @@ function toNotify(raw: Record<string, unknown>): NotifySettings {
 	};
 }
 
+/** Latency timing is opt-in: a missing, unreadable or non-boolean field means off. */
+function toTiming(raw: Record<string, unknown>): boolean {
+	return raw.timing === true;
+}
+
 export interface Settings {
 	/** Current values (a copy). */
 	notify(): NotifySettings;
 	/** Updates the in-memory value and persists; returns false when the file could not be written. */
 	setNotify(kind: NotifyKind, on: boolean): boolean;
+	/** Whether per-request latency timing is on (default off). A plain boolean read: it is checked on every request. */
+	timing(): boolean;
+	/** Updates the in-memory value and persists; returns false when the file could not be written. */
+	setTiming(on: boolean): boolean;
 }
 
 /** Temp file in the same directory (0600), then rename: readers never see a half-written file. */
@@ -54,39 +64,58 @@ function writeAtomic(file: string, text: string) {
 }
 
 export function createSettings(file: string): Settings {
-	const notify = toNotify(readRaw(file));
+	const loaded = readRaw(file);
+	const notify = toNotify(loaded);
+	let timing = toTiming(loaded);
+	/** Re-reads the file (another Pi process may have changed another switch) and writes `change(raw)` over it, keeping every other key. */
+	function persist(change: (raw: Record<string, unknown>) => Record<string, unknown>): boolean {
+		try {
+			mkdirSync(dirname(file), { recursive: true });
+			let isLink = false;
+			try { isLink = lstatSync(file).isSymbolicLink(); } catch { /* missing file: fine */ }
+			if (isLink) return false; // never write through (or replace) a symlinked settings file
+			const merged = change(readRaw(file));
+			writeAtomic(file, JSON.stringify(merged, null, 2) + "\n");
+			Object.assign(notify, toNotify(merged));
+			timing = toTiming(merged);
+			return true;
+		} catch {
+			return false;
+		}
+	}
 	return {
 		notify: () => ({ ...notify }),
 		setNotify(kind, on) {
 			notify[kind] = on;
-			try {
-				mkdirSync(dirname(file), { recursive: true });
-				let isLink = false;
-				try { isLink = lstatSync(file).isSymbolicLink(); } catch { /* missing file: fine */ }
-				if (isLink) return false; // never write through (or replace) a symlinked settings file
-				// Another Pi process may have changed the other switch since we loaded: re-read and change only ours.
-				const raw = readRaw(file);
-				const merged = { ...raw, notify: { ...(isObj(raw.notify) ? raw.notify : {}), ...toNotify(raw), [kind]: on } };
-				writeAtomic(file, JSON.stringify(merged, null, 2) + "\n");
-				Object.assign(notify, toNotify(merged));
-				return true;
-			} catch {
-				return false;
-			}
+			// Another Pi process may have changed the other switch since we loaded: change only ours.
+			return persist((raw) => ({ ...raw, notify: { ...(isObj(raw.notify) ? raw.notify : {}), ...toNotify(raw), [kind]: on } }));
+		},
+		timing: () => timing,
+		setTiming(on) {
+			timing = on;
+			return persist((raw) => ({ ...raw, timing: on }));
 		},
 	};
 }
 
 export const notifyStateLine = (n: NotifySettings) => `Claude relay notifications: warning ${n.warning ? "on" : "off"}, limit ${n.limit ? "on" : "off"}`;
-export const COMMAND_USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats";
+export const COMMAND_USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off]";
 
 interface NotifyUi { notify?(message: string, type?: "info" | "warning" | "error"): void }
 
 /** Handler for `/claude-relay <args>`. */
-export function runRelayCommand(args: string, settings: Settings, ui: NotifyUi | undefined, stats?: Pick<Stats, "summary">): void {
+export function runRelayCommand(args: string, settings: Settings, ui: NotifyUi | undefined, stats?: Pick<Stats, "summary">, timing?: Pick<Timing, "file" | "summary">): void {
 	const say = (message: string, type: "info" | "warning") => { try { ui?.notify?.(message, type); } catch { /* UI problems never break a command */ } };
 	const [cmd, kind, value, ...rest] = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
 	if (cmd === "stats" && stats && kind === undefined) return say(statsText(stats.summary()), "info");
+	if (cmd === "timing") {
+		if (kind === undefined) return say(timingStateText(settings.timing(), timing?.file, timing?.summary()), "info");
+		if ((kind !== "on" && kind !== "off") || value !== undefined) return say(COMMAND_USAGE, "warning");
+		const saved = settings.setTiming(kind === "on");
+		say(timingStateText(settings.timing(), timing?.file, timing?.summary()), "info");
+		if (!saved) say("Could not save the setting; it applies until Pi restarts.", "warning");
+		return;
+	}
 	if (cmd !== "notify") return say(COMMAND_USAGE, "warning");
 	if (kind === undefined) return say(notifyStateLine(settings.notify()), "info");
 	if ((kind !== "warning" && kind !== "limit") || (value !== "on" && value !== "off") || rest.length) return say(COMMAND_USAGE, "warning");
@@ -100,8 +129,9 @@ export function relayArgumentCompletions(prefix: string): { value: string; label
 	const parts = prefix.split(/\s+/);
 	const last = parts.pop() ?? "";
 	const head = parts.join(" ");
-	const options = parts.length === 0 ? ["notify", "stats"]
+	const options = parts.length === 0 ? ["notify", "stats", "timing"]
 		: parts.length === 1 && parts[0] === "notify" ? ["warning", "limit"]
+		: parts.length === 1 && parts[0] === "timing" ? ["on", "off"]
 		: parts.length === 2 && parts[0] === "notify" && (parts[1] === "warning" || parts[1] === "limit") ? ["on", "off"]
 		: [];
 	const items = options.filter((o) => o.startsWith(last)).map((o) => ({ value: head ? `${head} ${o}` : o, label: o }));
