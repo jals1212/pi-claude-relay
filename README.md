@@ -58,7 +58,7 @@ All are optional. Which login is used is never configured: it is the Anthropic l
 
 ### Settings menu
 
-`/claude-relay` with no arguments opens a settings menu in the style of Pi's `/settings` (Enter or Space toggles, Esc closes). Each change is saved at once, per Pi space, exactly like the text commands below:
+`/claude-relay` with no arguments opens a settings menu in the style of Pi's `/settings` (Enter or Space toggles, Esc closes; the mouse wheel scrolls and a click selects, as in `/settings`). Each change is saved at once, per Pi space, exactly like the text commands below:
 
 - **Usage warning pop-up** and **Usage limit pop-up** (see [Notifications](#notifications)),
 - **Usage in status bar** (see [Usage in the status bar](#usage-in-the-status-bar)),
@@ -66,6 +66,27 @@ All are optional. Which login is used is never configured: it is the Anthropic l
 - read-only views of the **Prompt-cache stats** and of the **Latency summary**.
 
 Without an interactive terminal UI (print, JSON or RPC mode) `/claude-relay` with no arguments prints the usage line instead. The text subcommands (`notify`, `stats`, `timing`, `status`) work everywhere and never open the menu. The menu loads `@earendil-works/pi-tui` from Pi at the moment it opens; if that fails the text behavior is used.
+
+### Settings file
+
+The menu and the text subcommands save to one file per Pi space, `<agent home>/claude-relay-settings.json` (written atomically with mode `0600`; a symlinked file is never written through). With every switch at its default it would read:
+
+```json
+{
+  "notify": { "warning": true, "limit": true },
+  "status": { "usage": true },
+  "timing": false
+}
+```
+
+| Key | Default | Set with | Effect |
+| --- | --- | --- | --- |
+| `notify.warning` | `true` | `/claude-relay notify warning on\|off` | Pop-up when you approach a usage limit |
+| `notify.limit` | `true` | `/claude-relay notify limit on\|off` | Pop-up when a usage limit is reached |
+| `status.usage` | `true` | `/claude-relay status on\|off` | Usage in the footer status; off shows the login line |
+| `timing` | `false` | `/claude-relay timing on\|off` | Latency timing log (`claude-relay-timing.jsonl`) |
+
+The file is created on the first change; a missing file, an unreadable one, or a missing or non-boolean key means the default. Each change re-reads the file and writes only its own key, so other keys (and changes another Pi process made) are kept. Editing the file by hand works too; the relay reads it when Pi starts.
 
 ### Notifications
 
