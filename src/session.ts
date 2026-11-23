@@ -495,6 +495,8 @@ export function createSession(deps: SessionDeps): RelaySession {
 		const current: NonNullable<typeof active> = { mapper, settle, onRateLimit: req.onRateLimit };
 		active = current;
 		lastOnRateLimit = req.onRateLimit;
+		// Only a rate-limit state seen for this request may mark its error as an exhausted quota: a stale `rejected` must not stop Pi from retrying a later, unrelated error.
+		lastRateStatus = undefined;
 		/** The turn was handed to claude (a user line written or tool results delivered): an abort has something to interrupt. */
 		let handedOff = false;
 		const onAbort = () => {

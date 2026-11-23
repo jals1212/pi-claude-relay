@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
-- An exhausted Claude usage window (the 5-hour or weekly limit) is no longer retried by Pi. The relay worded it `429 rate limit: …`, which Pi retries with a backoff of at most a minute, so every hit started `claude` again 7–9 times in under a minute for a limit that resets in hours. It is now worded `429 quota exceeded: …`, which Pi fails at once; transient rate limits keep the retryable `429 rate limit: …` wording.
+- An exhausted Claude usage window (the 5-hour or weekly limit) is no longer retried by Pi. The relay worded it `429 rate limit: …`, which Pi retries with a backoff of at most a minute, so every hit started `claude` again 7–9 times in under a minute for a limit that resets in hours. It is now worded `429 quota exceeded: …`, which Pi fails at once; transient rate limits keep the retryable `429 rate limit: …` wording. Only a `rejected` rate-limit event seen for the same request counts: one left over from an earlier request no longer marks a later, unrelated error.
 
 ## 0.1.5
 

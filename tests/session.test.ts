@@ -198,6 +198,17 @@ test("a rejected rate_limit_event before an error result marks the error as an e
 	assert.equal((events[0] as any).error.errorMessage, "429 quota exceeded: Overloaded");
 });
 
+test("a rejected rate_limit_event from an earlier turn does not make a later error a non-retryable quota error", async () => {
+	const { session, procs } = setup();
+	const first = await turn(session, [u("hola")], () => {
+		procs[0].emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 9 } });
+		procs[0].emit({ type: "result", subtype: "success", is_error: true, result: "You've hit your 5-hour limit" });
+	});
+	assert.equal((first[0] as any).error.errorMessage, "429 quota exceeded: You've hit your 5-hour limit");
+	const second = await turn(session, [u("otra vez")], () => procs.at(-1)!.emit({ type: "result", subtype: "success", is_error: true, result: "Internal server error" }));
+	assert.equal((second.at(-1) as any).error.errorMessage, "Internal server error");
+});
+
 test("process exit mid-turn fails the turn and the next turn respawns", async () => {
 	const { session, procs } = setup();
 	const events = await turn(session, [u("hola")], () => procs[0].exit(1, "boom\n"));
