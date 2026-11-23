@@ -153,7 +153,7 @@ test("a later successful save of one switch does not undo an unsaved change of a
 }));
 
 test("completions offer timing and its on/off", () => {
-	assert.deepEqual(relayArgumentCompletions("")?.map((i) => i.value), ["notify", "stats", "timing", "status", "reset"]);
+	assert.deepEqual(relayArgumentCompletions("")?.map((i) => i.value), ["notify", "stats", "timing", "status", "reset", "label"]);
 	assert.deepEqual(relayArgumentCompletions("ti")?.map((i) => i.value), ["timing"]);
 	assert.deepEqual(relayArgumentCompletions("timing ")?.map((i) => i.value), ["timing on", "timing off"]);
 	assert.equal(relayArgumentCompletions("timing on "), null);
@@ -266,4 +266,39 @@ test("completions offer reset, its when/format and their values", () => {
 	assert.deepEqual(relayArgumentCompletions("reset when ")?.map((i) => i.value), ["reset when always", "reset when near", "reset when never"]);
 	assert.deepEqual(relayArgumentCompletions("reset format c")?.map((i) => i.value), ["reset format compact"]);
 	assert.equal(relayArgumentCompletions("reset format full "), null);
+});
+
+test("status label is claude by default; a missing, corrupt or unknown status.label means claude; it persists next to the other status keys", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	assert.equal(createSettings(file).statusLabel(), "claude");
+	for (const v of [{ label: "Relay" }, { label: "symbol" }, { label: 1 }, "relay", {}]) { writeFileSync(file, JSON.stringify({ status: v })); assert.equal(createSettings(file).statusLabel(), "claude", JSON.stringify(v)); }
+	writeFileSync(file, JSON.stringify({ status: { usage: false, resetWhen: "never" } }));
+	const s = createSettings(file);
+	assert.equal(s.setStatusLabel("relay"), true);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { status: { usage: false, resetWhen: "never", label: "relay" } });
+	assert.equal(createSettings(file).statusLabel(), "relay");
+	assert.equal(s.setStatusLabel("spark"), true);
+	assert.equal(createSettings(file).statusLabel(), "spark");
+}));
+
+test("/claude-relay label shows, sets and repaints; invalid input warns with the usage and changes nothing", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	const s = createSettings(file);
+	const notes: [string, string | undefined][] = [];
+	let repaints = 0;
+	const run = (args: string) => runRelayCommand(args, s, { notify: (m, t) => notes.push([m, t]) }, undefined, undefined, () => repaints++);
+	run("label");
+	assert.deepEqual(notes.pop(), ["Claude relay status bar label: claude", "info"]);
+	run("label relay");
+	assert.deepEqual(notes.pop(), ["Claude relay status bar label: relay", "info"]);
+	assert.equal(repaints, 1);
+	for (const bad of ["label icon", "label symbol", "label claude now"]) { run(bad); assert.deepEqual(notes.pop(), [COMMAND_USAGE, "warning"], bad); }
+	assert.equal(repaints, 1);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { status: { label: "relay" } });
+}));
+
+test("completions offer label and its claude/relay/spark", () => {
+	assert.deepEqual(relayArgumentCompletions("la")?.map((i) => i.value), ["label"]);
+	assert.deepEqual(relayArgumentCompletions("label ")?.map((i) => i.value), ["label claude", "label relay", "label spark"]);
+	assert.equal(relayArgumentCompletions("label relay "), null);
 });

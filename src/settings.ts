@@ -65,6 +65,17 @@ function toResetFormat(raw: Record<string, unknown>): ResetFormat {
 	return isResetFormat(s.resetFormat) ? s.resetFormat : "full";
 }
 
+/** The footer usage line's prefix: the word `Claude`, the relay symbol `⎍`, or the Claude spark `✻`. */
+export type StatusLabel = "claude" | "relay" | "spark";
+export const STATUS_LABELS: readonly StatusLabel[] = ["claude", "relay", "spark"];
+const isStatusLabel = (v: unknown): v is StatusLabel => typeof v === "string" && (STATUS_LABELS as readonly string[]).includes(v);
+
+/** `Claude` by default: a missing, unreadable or unknown `status.label` means `claude`. */
+function toStatusLabel(raw: Record<string, unknown>): StatusLabel {
+	const s = isObj(raw.status) ? raw.status : {};
+	return isStatusLabel(s.label) ? s.label : "claude";
+}
+
 export interface Settings {
 	/** Current values (a copy). */
 	notify(): NotifySettings;
@@ -86,6 +97,10 @@ export interface Settings {
 	resetFormat(): ResetFormat;
 	/** Updates the in-memory value and persists; returns false when the file could not be written. */
 	setResetFormat(format: ResetFormat): boolean;
+	/** The usage line's prefix in the footer status (default `claude`). Read on every response. */
+	statusLabel(): StatusLabel;
+	/** Updates the in-memory value and persists; returns false when the file could not be written. */
+	setStatusLabel(label: StatusLabel): boolean;
 }
 
 /** Temp file in the same directory (0600), then rename: readers never see a half-written file. */
@@ -108,6 +123,7 @@ export function createSettings(file: string): Settings {
 	let usageStatus = toUsageStatus(loaded);
 	let resetWhen = toResetWhen(loaded);
 	let resetFormat = toResetFormat(loaded);
+	let statusLabel = toStatusLabel(loaded);
 	/**
 	 * Re-reads the file (another Pi process may have changed another switch) and writes `change(raw)` over it, keeping every other key.
 	 * `sync` takes the saved values back only for the setting being changed: another setting whose own save failed keeps its in-memory value.
@@ -165,19 +181,28 @@ export function createSettings(file: string): Settings {
 				(merged) => { resetFormat = toResetFormat(merged); },
 			);
 		},
+		statusLabel: () => statusLabel,
+		setStatusLabel(label) {
+			statusLabel = label;
+			return persist(
+				(raw) => ({ ...raw, status: { ...(isObj(raw.status) ? raw.status : {}), label } }),
+				(merged) => { statusLabel = toStatusLabel(merged); },
+			);
+		},
 	};
 }
 
 export const notifyStateLine = (n: NotifySettings) => `Claude relay notifications: warning ${n.warning ? "on" : "off"}, limit ${n.limit ? "on" : "off"}`;
 export const usageStatusStateLine = (on: boolean) => `Claude relay usage in status bar: ${on ? "on" : "off"}`;
 export const resetStateLine = (when: ResetWhen, format: ResetFormat) => `Claude relay reset time in status bar: ${when}, ${format}`;
-export const COMMAND_USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact]";
+export const statusLabelStateLine = (label: StatusLabel) => `Claude relay status bar label: ${label}`;
+export const COMMAND_USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact] | label [claude|relay|spark]";
 
 interface NotifyUi { notify?(message: string, type?: "info" | "warning" | "error"): void }
 
 /** Handler for `/claude-relay <args>`. */
 export function runRelayCommand(args: string, settings: Settings, ui: NotifyUi | undefined, stats?: Pick<Stats, "summary">, timing?: Pick<Timing, "file" | "summary">, onUsageStatus?: () => void): void {
-	// `onUsageStatus` repaints the footer; it runs after any footer setting (`status`, `reset`) changed.
+	// `onUsageStatus` repaints the footer; it runs after any footer setting (`status`, `reset`, `label`) changed.
 	const say = (message: string, type: "info" | "warning") => { try { ui?.notify?.(message, type); } catch { /* UI problems never break a command */ } };
 	const [cmd, kind, value, ...rest] = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
 	if (cmd === "stats" && stats && kind === undefined) return say(statsText(stats.summary()), "info");
@@ -209,6 +234,15 @@ export function runRelayCommand(args: string, settings: Settings, ui: NotifyUi |
 		if (!saved) say("Could not save the setting; it applies until Pi restarts.", "warning");
 		return;
 	}
+	if (cmd === "label") {
+		if (kind === undefined) return say(statusLabelStateLine(settings.statusLabel()), "info");
+		if (!isStatusLabel(kind) || value !== undefined) return say(COMMAND_USAGE, "warning");
+		const saved = settings.setStatusLabel(kind);
+		try { onUsageStatus?.(); } catch { /* the footer must never break a command */ }
+		say(statusLabelStateLine(settings.statusLabel()), "info");
+		if (!saved) say("Could not save the setting; it applies until Pi restarts.", "warning");
+		return;
+	}
 	if (cmd !== "notify") return say(COMMAND_USAGE, "warning");
 	if (kind === undefined) return say(notifyStateLine(settings.notify()), "info");
 	if ((kind !== "warning" && kind !== "limit") || (value !== "on" && value !== "off") || rest.length) return say(COMMAND_USAGE, "warning");
@@ -222,11 +256,12 @@ export function relayArgumentCompletions(prefix: string): { value: string; label
 	const parts = prefix.split(/\s+/);
 	const last = parts.pop() ?? "";
 	const head = parts.join(" ");
-	const options = parts.length === 0 ? ["notify", "stats", "timing", "status", "reset"]
+	const options = parts.length === 0 ? ["notify", "stats", "timing", "status", "reset", "label"]
 		: parts.length === 1 && (parts[0] === "timing" || parts[0] === "status") ? ["on", "off"]
 		: parts.length === 1 && parts[0] === "reset" ? ["when", "format"]
 		: parts.length === 2 && parts[0] === "reset" && parts[1] === "when" ? [...RESET_WHENS]
 		: parts.length === 2 && parts[0] === "reset" && parts[1] === "format" ? [...RESET_FORMATS]
+		: parts.length === 1 && parts[0] === "label" ? [...STATUS_LABELS]
 		: parts.length === 1 && parts[0] === "notify" ? ["warning", "limit"]
 		: parts.length === 2 && parts[0] === "notify" && (parts[1] === "warning" || parts[1] === "limit") ? ["on", "off"]
 		: [];

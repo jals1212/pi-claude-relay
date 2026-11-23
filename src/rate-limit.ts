@@ -4,7 +4,7 @@
 // and show a short footer status plus a warning when the state is not "allowed".
 
 import { paint, plain, themeOf, utilizationColor, type Segment } from "./footer-color.ts";
-import type { ResetFormat, ResetWhen } from "./settings.ts";
+import type { ResetFormat, ResetWhen, StatusLabel } from "./settings.ts";
 
 const H = "anthropic-ratelimit-unified-";
 const WINDOWS: Record<string, string> = { five_hour: "5h", seven_day: "7d" };
@@ -110,11 +110,17 @@ function windowSegments(get: (name: string) => string | undefined, nowMs: number
 	return { segments, withReset };
 }
 
+/** The footer prefix for each label: the word `Claude`, the relay symbol `⎍`, or the Claude spark `✻`. */
+export const LABEL_PREFIX: Record<StatusLabel, string> = { claude: "Claude", relay: "⎍", spark: "✻" };
+const prefixOf = (label: StatusLabel) => LABEL_PREFIX[label] ?? LABEL_PREFIX.claude;
+
 /**
  * `reset` chooses when (`always` by default, only `near` a limit, or `never`) and how (`full` by default, or `compact`) the footer shows
  * each window's reset time. A reached limit always shows its reset time.
+ * `label` chooses the footer prefix (default `claude`: `Claude 5h …`; `relay`: `⎍ 5h …`; `spark`: `✻ 5h …`). Pop-up messages always say Claude.
  */
-export function describeRateLimitHeaders(headers: Record<string, string>, nowMs = Date.now(), reset: ResetOptions = DEFAULT_RESET): RateLimitDescription | undefined {
+export function describeRateLimitHeaders(headers: Record<string, string>, nowMs = Date.now(), reset: ResetOptions = DEFAULT_RESET, label: StatusLabel = "claude"): RateLimitDescription | undefined {
+	const prefix = prefixOf(label);
 	const get = (name: string) => headers[H + name];
 	const status = get("status");
 	if (!status) return undefined;
@@ -134,17 +140,17 @@ export function describeRateLimitHeaders(headers: Record<string, string>, nowMs 
 
 	if (status === "rejected") {
 		return described(status, "error", signature,
-			[{ text: `Claude limit reached${resetRel ? ` · resets in ${resetRel}` : ""}`, color: "error" }],
+			[{ text: `${prefix} limit reached${resetRel ? ` · resets in ${resetRel}` : ""}`, color: "error" }],
 			`Claude usage limit reached${claimName ? ` (${claimName} window)` : ""}.${resetText} Requests will fail until then.`);
 	}
 	if (status === "allowed") {
-		return described(status, "ok", signature, [{ text: "Claude " }, ...(windows.length ? join(windows) : [{ text: "ok", color: "success" as const }])]);
+		return described(status, "ok", signature, [{ text: `${prefix} ` }, ...(windows.length ? join(windows) : [{ text: "ok", color: "success" as const }])]);
 	}
 	const claimPct = percent(get(`${claim === "seven_day" ? "7d" : "5h"}-utilization`));
 	// The overall reset time is only a fallback for when no window shows its own.
 	const parts = [...windows, ...(resetRel && show && !withReset ? [[{ text: `resets in ${resetRel}`, color: "warning" as const }]] : [])];
 	return described(status, "warning", signature,
-		[{ text: "Claude " }, ...(parts.length ? join(parts) : [{ text: status, color: "warning" as const }])],
+		[{ text: `${prefix} ` }, ...(parts.length ? join(parts) : [{ text: status, color: "warning" as const }])],
 		`Claude usage warning${claimName ? ` (${claimName} window)` : ""}${claimPct ? `: ${claimPct} used` : ""}.${resetText}`);
 }
 
@@ -156,10 +162,10 @@ interface UiLike { setStatus?(id: string, text: string | undefined): void; notif
  * The last usage seen is kept even while the footer is off (its reset times are recomputed on refresh); `refresh(ctx)` re-applies the footer after the switch changed:
  * usage on and one seen → that usage; otherwise `login(ctx)` puts the login line back (the line session start shows under the same status id).
  */
-export function createRateLimitHandler(opts: { now?: () => number; notifications?: () => { warning: boolean; limit: boolean }; usageStatus?: () => boolean; reset?: () => ResetOptions; login?: (ctx: { ui?: UiLike }) => void } = {}) {
+export function createRateLimitHandler(opts: { now?: () => number; notifications?: () => { warning: boolean; limit: boolean }; usageStatus?: () => boolean; reset?: () => ResetOptions; statusLabel?: () => StatusLabel; login?: (ctx: { ui?: UiLike }) => void } = {}) {
 	let lastNotified: string | undefined;
 	let lastHeaders: Record<string, string> | undefined;
-	const describe = (headers: Record<string, string>) => describeRateLimitHeaders(headers, (opts.now ?? Date.now)(), opts.reset?.() ?? DEFAULT_RESET);
+	const describe = (headers: Record<string, string>) => describeRateLimitHeaders(headers, (opts.now ?? Date.now)(), opts.reset?.() ?? DEFAULT_RESET, opts.statusLabel?.() ?? "claude");
 	const handler = (event: { status?: number; headers?: Record<string, string> }, ctx: { ui?: UiLike }) => {
 		const d = describe(event?.headers ?? {});
 		if (!d) return;

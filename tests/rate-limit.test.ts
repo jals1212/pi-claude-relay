@@ -317,6 +317,31 @@ test("the handler follows the reset settings on every response and on refresh", 
 	assert.deepEqual(status.at(-1), ["claude-relay", "Claude 5h 14% · 7d 50%"]);
 });
 
+test("label relay: the footer prefix is ⎍ in every state, spark is ✻; pop-up messages still say Claude", () => {
+	const d = (i: any) => describeRateLimitHeaders(anthropicRateLimitHeaders(i), NOW, { when: "always", format: "compact" }, "relay")!;
+	assert.equal(describeRateLimitHeaders(anthropicRateLimitHeaders(info()), NOW, { when: "always", format: "compact" }, "spark")!.footer, "✻ 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
+	assert.equal(d(info()).footer, "⎍ 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
+	assert.equal(describeRateLimitHeaders({ "anthropic-ratelimit-unified-status": "allowed" }, NOW, undefined, "relay")!.footer, "⎍ ok");
+	const r = d({ status: "rejected", resetsAt: NOW / 1000 + 7500 });
+	assert.equal(r.footer, "⎍ limit reached · resets in 2h 5m");
+	assert.match(r.message!, /^Claude usage limit reached/);
+	const w = d(info({ status: "allowed_warning" }));
+	assert.match(w.footer, /^⎍ 5h 14%/);
+	assert.match(w.message!, /^Claude usage warning/);
+	assert.equal(describeRateLimitHeaders(anthropicRateLimitHeaders(info()), NOW, { when: "always", format: "compact" })!.footer, "Claude 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
+});
+
+test("the handler follows the label setting on every response and on refresh", () => {
+	const label = { v: "relay" as any };
+	const handle = createRateLimitHandler({ now: () => NOW, reset: () => ({ when: "never", format: "full" }), statusLabel: () => label.v });
+	const { status, ctx } = fakeCtx();
+	handle(evOf(info()), ctx);
+	assert.deepEqual(status.at(-1), ["claude-relay", "⎍ 5h 14% · 7d 50%"]);
+	label.v = "claude";
+	handle.refresh(ctx);
+	assert.deepEqual(status.at(-1), ["claude-relay", "Claude 5h 14% · 7d 50%"]);
+});
+
 test("reset when near: only the window near its own limit shows its reset time; every window when none reports a status", () => {
 	const w = (u5: number, s5: string, s7: string) => info({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: u5, resetsAt: NOW / 1000 + 2400, status: s5 }, seven_day: { utilization: 0.5, resetsAt: NOW / 1000 + 200_000, status: s7 } } });
 	const d = (i: any, format: any = "compact") => describeRateLimitHeaders(anthropicRateLimitHeaders(i), NOW, { when: "near", format })!.footer;

@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - The footer status shows when each usage window resets: `Claude 5h 63% (resets in 52m) · 7d 74% (resets in 8h 12m)`. Before, the reset time appeared only for a warning or a reached limit. Two settings in the `/claude-relay` menu shape it. **Reset time in status bar** (`/claude-relay reset when always|near|never`) chooses when: `always` (default), only `near` a limit (Claude's warning state; just the window near its limit), or `never`. **Reset time format** (`/claude-relay reset format full|compact`) chooses how: `full` (default) or `compact` (`Claude 5h 63% ↻52m · 7d 74% ↻8h 12m`). Saved per Pi space as `status.resetWhen` and `status.resetFormat` in `claude-relay-settings.json`. A reached limit always shows its reset time. The reset times are recomputed from the current time whenever the footer is repainted.
+- **Status bar label** in the `/claude-relay` menu or `/claude-relay label [claude|relay|spark]`: the usage line starts with `Claude` (default), the relay symbol `⎍` or the Claude spark `✻` (`⎍ 5h 63% ↻52m · 7d 74% ↻8h 12m`, `⎍ limit reached · …`). Saved per Pi space as `status.label`. The login line and the pop-ups are not affected.
 
 ## 0.2.1
 

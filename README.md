@@ -61,11 +61,11 @@ All are optional. Which login is used is never configured: it is the Anthropic l
 `/claude-relay` with no arguments opens a settings menu in the style of Pi's `/settings` (Enter or Space toggles, Esc closes; the mouse wheel scrolls and a click selects, as in `/settings`). Each change is saved at once, per Pi space, exactly like the text commands below:
 
 - **Usage warning pop-up** and **Usage limit pop-up** (see [Notifications](#notifications)),
-- **Usage in status bar**, **Reset time in status bar** and **Reset time format** (see [Usage in the status bar](#usage-in-the-status-bar)),
+- **Usage in status bar**, **Reset time in status bar**, **Reset time format** and **Status bar label** (see [Usage in the status bar](#usage-in-the-status-bar)),
 - **Latency timing** (see [Latency timing](#latency-timing); its description shows the log file),
 - read-only views of the **Prompt-cache stats** and of the **Latency summary**.
 
-Without an interactive terminal UI (print, JSON or RPC mode) `/claude-relay` with no arguments prints the usage line instead. The text subcommands (`notify`, `stats`, `timing`, `status`, `reset`) work everywhere and never open the menu. The menu loads `@earendil-works/pi-tui` from Pi at the moment it opens; if that fails the text behavior is used.
+Without an interactive terminal UI (print, JSON or RPC mode) `/claude-relay` with no arguments prints the usage line instead. The text subcommands (`notify`, `stats`, `timing`, `status`, `reset`, `label`) work everywhere and never open the menu. The menu loads `@earendil-works/pi-tui` from Pi at the moment it opens; if that fails the text behavior is used.
 
 ### Settings file
 
@@ -74,7 +74,7 @@ The menu and the text subcommands save to one file per Pi space, `<agent home>/c
 ```json
 {
   "notify": { "warning": true, "limit": true },
-  "status": { "usage": true, "resetWhen": "always", "resetFormat": "full" },
+  "status": { "usage": true, "resetWhen": "always", "resetFormat": "full", "label": "claude" },
   "timing": false
 }
 ```
@@ -86,6 +86,7 @@ The menu and the text subcommands save to one file per Pi space, `<agent home>/c
 | `status.usage` | `true` | `/claude-relay status on\|off` | Usage in the footer status; off shows the login line |
 | `status.resetWhen` | `"always"` | `/claude-relay reset when always\|near\|never` | When the footer shows each usage window's reset time |
 | `status.resetFormat` | `"full"` | `/claude-relay reset format full\|compact` | How the footer shows each usage window's reset time |
+| `status.label` | `"claude"` | `/claude-relay label claude\|relay\|spark` | Prefix of the footer usage line: `Claude`, `⎍` or `✻` |
 | `timing` | `false` | `/claude-relay timing on\|off` | Latency timing log (`claude-relay-timing.jsonl`) |
 
 The file is created on the first change; a missing file, an unreadable one, or a missing or invalid key means the default. Each change re-reads the file and writes only its own key, so other keys (and changes another Pi process made) are kept. Editing the file by hand works too; the relay reads it when Pi starts.
@@ -127,6 +128,17 @@ Two settings shape each window's reset time: **Reset time in status bar** choose
 ```
 
 "Near a limit" is Claude's warning state (`allowed_warning`), the one that also brings the usage warning pop-up; with `near` only the window near its own limit shows its reset time (every window when Claude does not report a per-window status). Both apply at once and are saved as `{ "status": { "resetWhen": "near", "resetFormat": "compact" } }`; a missing or unknown value means the default. The reset times count from the last response and are recomputed whenever the footer is repainted (after a response or a settings change). A window without a reset time shows only its utilization. Near a limit the reset part is colored `warning`; when no window reports its own reset time, the overall one is shown instead (`Claude 5h 91% · resets in 40m`). A reached limit always reads `Claude limit reached · resets in …`, whatever these settings say. With **Usage in status bar** off they have no effect.
+
+**Status bar label** in the menu (or `/claude-relay label`) chooses the prefix of the usage line:
+
+```
+/claude-relay label            # show the current choice
+/claude-relay label claude     # Claude 5h 48% ↻52m · 7d 73% ↻8h 12m   (default)
+/claude-relay label relay      # ⎍ 5h 48% ↻52m · 7d 73% ↻8h 12m   (the relay symbol)
+/claude-relay label spark      # ✻ 5h 48% ↻52m · 7d 73% ↻8h 12m
+```
+
+It applies to every state of the usage line (`⎍ limit reached · resets in …` too), at once, and is saved as `{ "status": { "label": "relay" } }`; a missing or unknown value means `claude`. The login line and the pop-ups keep saying Claude.
 
 ### Prompt-cache stats
 

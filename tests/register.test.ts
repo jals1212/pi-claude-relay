@@ -123,7 +123,7 @@ test("opted out: no login status", () => {
 
 // --- /claude-relay notify (S6) ---
 const STATE = (w: string, l: string) => `Claude relay notifications: warning ${w}, limit ${l}`;
-const USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact]";
+const USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact] | label [claude|relay|spark]";
 
 function tmpSettings() {
 	const dir = mkdtempSync(join(tmpdir(), "relay-settings-"));
@@ -149,7 +149,7 @@ test("registers the claude-relay command with a description and argument complet
 		assert.equal(typeof cmd.handler, "function");
 		assert.equal(typeof cmd.description, "string");
 		const labels = (items: any) => (items ?? []).map((i: any) => i.value);
-		assert.deepEqual(labels(await cmd.getArgumentCompletions("")), ["notify", "stats", "timing", "status", "reset"]);
+		assert.deepEqual(labels(await cmd.getArgumentCompletions("")), ["notify", "stats", "timing", "status", "reset", "label"]);
 		assert.deepEqual(labels(await cmd.getArgumentCompletions("status ")), ["status on", "status off"]);
 		assert.match(cmd.description, /status/);
 		assert.deepEqual(labels(await cmd.getArgumentCompletions("timing ")), ["timing on", "timing off"]);
