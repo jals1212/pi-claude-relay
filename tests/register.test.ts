@@ -450,14 +450,14 @@ test("PI_CLAUDE_RELAY_DEBUG_LOG: one JSON line per settled turn, mode 0600, hash
 	try {
 		const r = statsRig({ PI_CLAUDE_RELAY_DEBUG_LOG: file });
 		await r.handlers.session_start({ type: "session_start" }, { sessionManager: { getSessionId: () => "main" } });
-		r.infos.push({ plan: "spawn", usage: U(10, 5, 0, 90), stopReason: "stop" }, { plan: "restart", reason: "abort", usage: U(1, 2, 3, 4), stopReason: "toolUse" });
+		r.infos.push({ plan: "spawn", usage: U(10, 5, 0, 90), stopReason: "stop" }, { plan: "restart", reason: "abort", usage: U(1, 2, 3, 4), stopReason: "toolUse" }, { plan: "restart", reason: "system-prompt", changed: ["system-prompt", "tools"], usage: U(1, 2, 3, 4), stopReason: "toolUse" });
 		const before = Date.now();
-		r.ask("main"); r.ask("main");
-		await flush(); await flush();
+		r.ask("main"); r.ask("main"); r.ask("main");
+		await flush(); await flush(); await flush();
 		const text = readFileSync(file, "utf8");
 		assert.equal(statSync(file).mode & 0o777, 0o600);
 		const lines = text.trimEnd().split("\n").map((l) => JSON.parse(l));
-		assert.equal(lines.length, 2);
+		assert.equal(lines.length, 3);
 		const toolsHash = sha8(JSON.stringify(r.tools.map((t) => [t.name, t.description, t.parameters])));
 		for (const l of lines) {
 			assert.equal(typeof l.t, "number");
@@ -467,6 +467,7 @@ test("PI_CLAUDE_RELAY_DEBUG_LOG: one JSON line per settled turn, mode 0600, hash
 		assert.deepEqual(Object.keys(lines[0]), ["session", "plan", "stopReason", "usage", "systemPromptHash", "toolsHash", "messages"]);
 		assert.deepEqual(lines[0], { session: sha8("main"), plan: "spawn", stopReason: "stop", usage: U(10, 5, 0, 90), systemPromptHash: sha8("SECRET SYSTEM PROMPT"), toolsHash, messages: 2 });
 		assert.deepEqual(lines[1], { session: sha8("main"), plan: "restart", reason: "abort", stopReason: "toolUse", usage: U(1, 2, 3, 4), systemPromptHash: sha8("SECRET SYSTEM PROMPT"), toolsHash, messages: 2 });
+		assert.deepEqual(lines[2], { session: sha8("main"), plan: "restart", reason: "system-prompt", changed: ["system-prompt", "tools"], stopReason: "toolUse", usage: U(1, 2, 3, 4), systemPromptHash: sha8("SECRET SYSTEM PROMPT"), toolsHash, messages: 2 });
 		for (const secret of ["sk-ant-oat01-DEBUGSECRET", "SECRET SYSTEM PROMPT", "\"main\"", "Read a file", "http://127.0.0.1"]) assert.equal(text.includes(secret), false, secret);
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });

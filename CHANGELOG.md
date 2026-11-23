@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- The debug log (`PI_CLAUDE_RELAY_DEBUG_LOG`) and the timing log name every config field behind a restart in a new `changed` field (`["system-prompt", "tools"]`). `reason` still names only the first, so a tool set change looked like a plain `system-prompt` restart: Pi lists the tools in the system prompt, and the system prompt is checked first. `/claude-relay stats` is unchanged.
+
 ## 0.3.0
 
 ### Added

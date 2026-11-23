@@ -38,8 +38,8 @@ function debugLogWriter(env: NodeJS.ProcessEnv) {
 		const file = env.PI_CLAUDE_RELAY_DEBUG_LOG;
 		if (!file) return;
 		try {
-			const { plan, reason, stopReason, usage } = r.info;
-			const line = { t: Date.now(), session: createHash("sha256").update(r.sessionKey).digest("hex").slice(0, 8), plan, reason, stopReason, usage, systemPromptHash: r.systemPromptHash, toolsHash: r.toolsHash, messages: r.messages };
+			const { plan, reason, changed, stopReason, usage } = r.info;
+			const line = { t: Date.now(), session: createHash("sha256").update(r.sessionKey).digest("hex").slice(0, 8), plan, reason, changed, stopReason, usage, systemPromptHash: r.systemPromptHash, toolsHash: r.toolsHash, messages: r.messages };
 			appendFileSync(file, JSON.stringify(line) + "\n", { mode: 0o600 });
 		} catch { /* a debug log must never break a turn */ }
 	};

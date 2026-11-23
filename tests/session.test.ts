@@ -613,6 +613,15 @@ test("onTurn: tool results report resolve; toolUse is the stop reason of the too
 	assert.deepEqual(infos[1], { plan: "resolve", resumed: false, usage: usageOf(USAGE_B), stopReason: "stop" });
 });
 
+test("onTurn: a system prompt and tool set changed together are both listed in `changed`; the reason stays the first", async () => {
+	const infos: TurnInfo[] = [];
+	const { session, procs } = setup({ onTurn: (i) => infos.push(structuredClone(i)) });
+	const e1 = await turn(session, [u("hola")], () => procs[0].text("m1", "a"));
+	await turn(session, [u("hola"), (e1.at(-1) as any).message, u("sigue")], () => cachedText(procs[1], "m2", USAGE_B), { systemPrompt: "OTHER", tools: [{ name: "bash", description: "Run", parameters: { type: "object" } }] } as any);
+	assert.equal(infos[1].reason, "system-prompt");
+	assert.deepEqual(infos[1].changed, ["system-prompt", "tools"]);
+});
+
 test("onTurn: a changed model restarts with reason `model`; the other planner reasons map to stable categories", async () => {
 	const cases: [string, Partial<typeof base>, string][] = [
 		["model", { model: "claude-opus-5-5" }, "model"],
@@ -627,7 +636,7 @@ test("onTurn: a changed model restarts with reason `model`; the other planner re
 		const e1 = await turn(session, [u("hola")], () => procs[0].text("m1", "a"));
 		await turn(session, [u("hola"), (e1.at(-1) as any).message, u("sigue")], () => cachedText(procs[1], "m2", USAGE_B), change as any);
 		// Adapted (S9): every cause except the system prompt resumes claude's session (`resumed: true`).
-		assert.deepEqual(infos[1], { plan: "restart", reason, resumed: reason !== "system-prompt", usage: usageOf(USAGE_B), stopReason: "stop" }, label);
+		assert.deepEqual(infos[1], { plan: "restart", reason, changed: [reason], resumed: reason !== "system-prompt", usage: usageOf(USAGE_B), stopReason: "stop" }, label);
 	}
 });
 
@@ -638,6 +647,7 @@ test("onTurn: diverged history restarts with reason `history`", async () => {
 	await turn(session, [u("resumen"), u("sigue")], () => procs[1].text("m2", "b"));
 	assert.equal(infos[1].plan, "restart");
 	assert.equal(infos[1].reason, "history");
+	assert.equal(infos[1].changed, undefined, "only config restarts list changed fields");
 });
 
 test("onTurn: an abort no longer restarts: the NEXT turn is a plain send on the same process; the abort reason appears only after the interrupt timed out", async () => {

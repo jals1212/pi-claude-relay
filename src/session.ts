@@ -2,7 +2,7 @@
 // stream() turns one Pi request into exactly one Anthropic message from claude.
 import { createHash, randomUUID } from "node:crypto";
 import { createTurnMapper, claudeToolName, type RelayEvent, type TurnMapper, type Usage } from "./turn.ts";
-import { planTurn, restartPlan, restartCategory, fingerprint, renderTranscript, type Plan, type PiMessage, type Snapshot, type SessionConfig, type PiContent } from "./sync.ts";
+import { planTurn, restartPlan, restartCategory, restartChanges, fingerprint, renderTranscript, type Plan, type PiMessage, type Snapshot, type SessionConfig, type PiContent } from "./sync.ts";
 import type { McpHost, PiTool } from "./mcp-host.ts";
 import { retryableRateLimitMessage } from "./rate-limit.ts";
 
@@ -68,6 +68,8 @@ export interface TurnInfo {
 	plan: "send" | "resolve" | "restart" | "spawn";
 	/** Why a restart happened: `model`, `system-prompt`, `tools`, `effort`, `credential`, `history`, `missing-tool-call`, `other` (planner), or `abort`, `error`, `exit` (the previous process was lost). */
 	reason?: string;
+	/** A config restart: every field that changed (`["system-prompt", "tools"]`); `reason` is the first. Pi lists the tools in the system prompt, so a tool change usually changes both. */
+	changed?: string[];
 	/** A restart continued claude's own session (`--resume`) instead of replaying a flattened transcript; the cache and structured history survive. */
 	resumed: boolean;
 	/** Usage of the turn's final assistant message. */
@@ -533,7 +535,11 @@ export function createSession(deps: SessionDeps): RelaySession {
 		const info: TurnInfo = { plan: plan.kind, resumed: !!resumeId };
 		if (plan.kind === "restart") {
 			if (!proc && !everSpawned) info.plan = "spawn";
-			else info.reason = missingToolCall ? "missing-tool-call" : proc ? restartCategory(plan.reason) : (lost ?? restartCategory(plan.reason));
+			else {
+				info.reason = missingToolCall ? "missing-tool-call" : proc ? restartCategory(plan.reason) : (lost ?? restartCategory(plan.reason));
+				const changed = !missingToolCall && (proc || !lost) ? restartChanges(plan.reason) : undefined;
+				if (changed) info.changed = changed;
+			}
 		}
 		lost = undefined;
 

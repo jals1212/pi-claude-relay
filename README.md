@@ -155,7 +155,7 @@ cache warm requests answered locally: 3 · one-off requests: 1
 - **resumed** (shown only when above zero) counts the restarts that continued `claude`'s own session with `--resume` instead of replaying a flattened transcript (see [How it works](#how-it-works)); it is a subset of the restarts.
 - **cache warm requests** are Pi's idle cache-warming requests, answered locally without reaching `claude`; **one-off requests** are turns of throwaway sessions (compaction and summaries), which are kept out of the other figures.
 
-Set `PI_CLAUDE_RELAY_DEBUG_LOG=/path/to/file` to also append one JSON line per settled turn (`t`, `session` = first 8 hex of the sha256 of the Pi session id, `plan`, `reason`, `stopReason`, `usage`, `systemPromptHash`, `toolsHash`, `messages`). The file is created with mode `0600` and never contains prompt text, tool arguments, credentials or the MCP URL; write errors are ignored.
+Set `PI_CLAUDE_RELAY_DEBUG_LOG=/path/to/file` to also append one JSON line per settled turn (`t`, `session` = first 8 hex of the sha256 of the Pi session id, `plan`, `reason`, `changed`, `stopReason`, `usage`, `systemPromptHash`, `toolsHash`, `messages`). `reason` is the first cause of a restart, as in `stats`; for a config change `changed` lists every field that changed (`["system-prompt", "tools"]`). Pi lists the active tools in the system prompt, so a tool set that changes mid-session (a tool registering after the first turn, for example) usually shows as `system-prompt` with `tools` in `changed`. The file is created with mode `0600` and never contains prompt text, tool arguments, credentials or the MCP URL; write errors are ignored.
 
 ### Latency timing
 
@@ -171,7 +171,7 @@ The switch is saved per Pi space in `<agent home>/claude-relay-settings.json` (`
 
 | Field | Meaning |
 | --- | --- |
-| `spawn` | a `claude` process was started or restarted for this request (absent when the live one was reused); `plan` and `reason` say which, with the same restart reasons as `stats` |
+| `spawn` | a `claude` process was started or restarted for this request (absent when the live one was reused); `plan` and `reason` say which, with the same restart reasons as `stats`; `changed` lists every changed config field, as in the debug log |
 | `firstLine` | first line `claude` wrote for the request |
 | `messageStart` | the response started (`message_start`) |
 | `firstThinking`, `firstText`, `firstTool` | first thinking delta, first text delta, first tool call |

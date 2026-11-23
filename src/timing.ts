@@ -72,7 +72,7 @@ export function createTiming(deps: TimingDeps): Timing {
 					if (samples.length > max) samples.splice(0, samples.length - max);
 				}
 				const line = {
-					t: Date.now(), session: sha8(report.sessionKey), plan: info.plan, reason: info.reason, throwaway: report.throwaway || undefined,
+					t: Date.now(), session: sha8(report.sessionKey), plan: info.plan, reason: info.reason, changed: info.changed, throwaway: report.throwaway || undefined,
 					model: t.model, stopReason: info.stopReason, output: info.usage?.output,
 					spawn: round(t.spawn), firstLine: round(t.firstLine), messageStart: round(t.messageStart), firstThinking: round(t.firstThinking),
 					firstText: round(t.firstText), firstTool: round(t.firstTool), stop: round(t.stop), settle: round(t.settle),

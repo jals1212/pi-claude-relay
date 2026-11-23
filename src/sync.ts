@@ -63,6 +63,15 @@ export function restartCategory(reason: string): RestartCategory {
 	return "other";
 }
 
+/**
+ * Every config field a planner restart reason names, as categories (`config changed: system prompt, tools` → `["system-prompt", "tools"]`).
+ * Undefined for any other reason. `restartCategory` keeps only the first, so stats stay stable; this is for the debug and timing logs.
+ */
+export function restartChanges(reason: string): RestartCategory[] | undefined {
+	if (!reason.startsWith(CONFIG_CHANGED)) return undefined;
+	return reason.slice(CONFIG_CHANGED.length).split(", ").map((label) => (CONFIG_FIELDS.find((f) => f.label === label)?.category ?? "other") as RestartCategory);
+}
+
 /** The flattened-replay restart of `messages`; `resume` marks it resumable (see `RestartPlan`). */
 export function restartPlan(messages: PiMessage[], reason: string, resume?: Extract<PiMessage, { role: "user" }>): RestartPlan {
 	const last = messages.at(-1);

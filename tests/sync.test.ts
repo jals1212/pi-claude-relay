@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planTurn, restartCategory, fingerprint, createLineReader, renderTranscript, type Snapshot, type PiMessage } from "../src/sync.ts";
+import { planTurn, restartCategory, restartChanges, fingerprint, createLineReader, renderTranscript, type Snapshot, type PiMessage } from "../src/sync.ts";
 
 const cfg = { model: "sonnet", systemPrompt: "sys", toolsKey: "read|bash", effort: "medium" };
 const u = (text: string): PiMessage => ({ role: "user", content: text, timestamp: 1 });
@@ -325,4 +325,12 @@ test("a config change with diverged history or a pending tool call is not resuma
 test("existing restarts for unrelated causes carry no resume field", () => {
 	const plan = planTurn(undefined, { config: cfg, messages: [u("hola")] });
 	assert.equal("resume" in plan, false);
+});
+
+test("restartChanges names every changed config field as a category; the category stays the first one", () => {
+	assert.deepEqual(restartChanges("config changed: system prompt, tools"), ["system-prompt", "tools"]);
+	assert.equal(restartCategory("config changed: system prompt, tools"), "system-prompt");
+	assert.deepEqual(restartChanges("config changed: model, effort"), ["model", "effort"]);
+	assert.deepEqual(restartChanges("config changed: tools"), ["tools"]);
+	for (const r of ["history diverged", "tool results do not match pending tool calls", "process lost", "whatever"]) assert.equal(restartChanges(r), undefined, r);
 });
