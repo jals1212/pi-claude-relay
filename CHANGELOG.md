@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## 0.2.1
+
+No changes to the code: it is the same as 0.2.0.
+
+### Changed
+
+- README: a **Settings file** reference with the whole `claude-relay-settings.json`, every key with its default, the command that sets it and its effect, and how the file is written and read. The settings menu section now says the mouse wheel scrolls and a click selects, as in Pi's `/settings`.
+
 ## 0.2.0
 
 ### Added
