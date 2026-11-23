@@ -90,10 +90,10 @@ export function registerRelay(pi: Pick<ExtensionAPI, "registerProvider" | "on" |
 	// The login line (session start) and the usage line share one status id: the handler restores the login line when the usage switch goes off.
 	let lastLogin: Segment[] | undefined;
 	const showLogin = (ctx: any) => { lastLogin = showLoginStatus(ctx, lastLogin); };
-	const rateLimit = createRateLimitHandler({ notifications: () => settings.notify(), usageStatus: () => settings.usageStatus(), login: showLogin });
+	const rateLimit = createRateLimitHandler({ notifications: () => settings.notify(), usageStatus: () => settings.usageStatus(), reset: () => ({ when: settings.resetWhen(), format: settings.resetFormat() }), login: showLogin });
 	pi.on("after_provider_response", rateLimit as any);
 	pi.registerCommand("claude-relay", {
-		description: "Claude relay settings menu (no arguments), prompt-cache stats, latency timing and usage in the status bar: /claude-relay [notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off]]",
+		description: "Claude relay settings menu (no arguments), prompt-cache stats, latency timing and usage in the status bar: /claude-relay [notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact]]",
 		getArgumentCompletions: relayArgumentCompletions,
 		handler: async (args, ctx) => {
 			// No arguments in an interactive Pi: the settings menu; anywhere else (or if it cannot open) the text command.

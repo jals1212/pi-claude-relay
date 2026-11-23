@@ -61,11 +61,11 @@ All are optional. Which login is used is never configured: it is the Anthropic l
 `/claude-relay` with no arguments opens a settings menu in the style of Pi's `/settings` (Enter or Space toggles, Esc closes; the mouse wheel scrolls and a click selects, as in `/settings`). Each change is saved at once, per Pi space, exactly like the text commands below:
 
 - **Usage warning pop-up** and **Usage limit pop-up** (see [Notifications](#notifications)),
-- **Usage in status bar** (see [Usage in the status bar](#usage-in-the-status-bar)),
+- **Usage in status bar**, **Reset time in status bar** and **Reset time format** (see [Usage in the status bar](#usage-in-the-status-bar)),
 - **Latency timing** (see [Latency timing](#latency-timing); its description shows the log file),
 - read-only views of the **Prompt-cache stats** and of the **Latency summary**.
 
-Without an interactive terminal UI (print, JSON or RPC mode) `/claude-relay` with no arguments prints the usage line instead. The text subcommands (`notify`, `stats`, `timing`, `status`) work everywhere and never open the menu. The menu loads `@earendil-works/pi-tui` from Pi at the moment it opens; if that fails the text behavior is used.
+Without an interactive terminal UI (print, JSON or RPC mode) `/claude-relay` with no arguments prints the usage line instead. The text subcommands (`notify`, `stats`, `timing`, `status`, `reset`) work everywhere and never open the menu. The menu loads `@earendil-works/pi-tui` from Pi at the moment it opens; if that fails the text behavior is used.
 
 ### Settings file
 
@@ -74,7 +74,7 @@ The menu and the text subcommands save to one file per Pi space, `<agent home>/c
 ```json
 {
   "notify": { "warning": true, "limit": true },
-  "status": { "usage": true },
+  "status": { "usage": true, "resetWhen": "always", "resetFormat": "full" },
   "timing": false
 }
 ```
@@ -84,9 +84,11 @@ The menu and the text subcommands save to one file per Pi space, `<agent home>/c
 | `notify.warning` | `true` | `/claude-relay notify warning on\|off` | Pop-up when you approach a usage limit |
 | `notify.limit` | `true` | `/claude-relay notify limit on\|off` | Pop-up when a usage limit is reached |
 | `status.usage` | `true` | `/claude-relay status on\|off` | Usage in the footer status; off shows the login line |
+| `status.resetWhen` | `"always"` | `/claude-relay reset when always\|near\|never` | When the footer shows each usage window's reset time |
+| `status.resetFormat` | `"full"` | `/claude-relay reset format full\|compact` | How the footer shows each usage window's reset time |
 | `timing` | `false` | `/claude-relay timing on\|off` | Latency timing log (`claude-relay-timing.jsonl`) |
 
-The file is created on the first change; a missing file, an unreadable one, or a missing or non-boolean key means the default. Each change re-reads the file and writes only its own key, so other keys (and changes another Pi process made) are kept. Editing the file by hand works too; the relay reads it when Pi starts.
+The file is created on the first change; a missing file, an unreadable one, or a missing or invalid key means the default. Each change re-reads the file and writes only its own key, so other keys (and changes another Pi process made) are kept. Editing the file by hand works too; the relay reads it when Pi starts.
 
 ### Notifications
 
@@ -103,7 +105,7 @@ The state is saved per Pi space in `<agent home>/claude-relay-settings.json` (`{
 
 ### Usage in the status bar
 
-After each response the footer shows your Claude usage (`Claude 5h 48% · 7d 73%`). To hide it, turn off **Usage in status bar** in the `/claude-relay` menu or use the text command (on by default):
+After each response the footer shows your Claude usage and when each window resets (`Claude 5h 48% (resets in 52m) · 7d 73% (resets in 8h 12m)`). To hide it, turn off **Usage in status bar** in the `/claude-relay` menu or use the text command (on by default):
 
 ```
 /claude-relay status         # show the current state
@@ -112,6 +114,19 @@ After each response the footer shows your Claude usage (`Claude 5h 48% · 7d 73%
 ```
 
 The change applies immediately, without restarting Pi. It is saved per Pi space in `<agent home>/claude-relay-settings.json` (`{ "status": { "usage": false } }`); a missing or unreadable file or field means on, and `notify`, `timing` and unknown keys are kept. Only the footer is affected: the usage warning and limit pop-ups (see [Notifications](#notifications)) and Pi's automatic retries stay the same.
+
+Two settings shape each window's reset time: **Reset time in status bar** chooses *when* it shows, **Reset time format** *how*:
+
+```
+/claude-relay reset                  # show both (always, full)
+/claude-relay reset when always      # Claude 5h 48% (resets in 52m) · 7d 73% (resets in 8h 12m)   (default)
+/claude-relay reset when near        # Claude 5h 48% · 7d 73%, and near a limit: Claude 5h 91% (resets in 40m) · 7d 73%
+/claude-relay reset when never       # Claude 5h 48% · 7d 73%, even near a limit
+/claude-relay reset format full      # (resets in 52m)   (default)
+/claude-relay reset format compact   # ↻52m
+```
+
+"Near a limit" is Claude's warning state (`allowed_warning`), the one that also brings the usage warning pop-up; with `near` only the window near its own limit shows its reset time (every window when Claude does not report a per-window status). Both apply at once and are saved as `{ "status": { "resetWhen": "near", "resetFormat": "compact" } }`; a missing or unknown value means the default. The reset times count from the last response and are recomputed whenever the footer is repainted (after a response or a settings change). A window without a reset time shows only its utilization. Near a limit the reset part is colored `warning`; when no window reports its own reset time, the overall one is shown instead (`Claude 5h 91% · resets in 40m`). A reached limit always reads `Claude limit reached · resets in …`, whatever these settings say. With **Usage in status bar** off they have no effect.
 
 ### Prompt-cache stats
 
@@ -168,7 +183,7 @@ There is no measurable cost: when it is off, a request pays one boolean check an
 - **Restarts keep the cache.** The first `claude` process of a Pi session is started with `--session-id <uuid>` and session persistence on, and the relay tracks the session id `claude` reports. When a process has to be replaced (credential refresh, effort, tool-set or model change, a crash, an unconfirmed interrupt) and Pi's history has not diverged from what `claude` already has, the new process is started with `--resume <session id>` and receives only the new message: Anthropic's prompt cache and the structured history survive. A resumed session whose turn fails is not resumed again: the next attempt replays the transcript. The relay falls back to replaying a flattened transcript in a fresh session only when the history diverged (compaction, branch switch, edited history), a tool call was pending, no session id is known, the system prompt changed (`claude` keeps the system prompt a session started with, so a changed one cannot be applied on resume), or the resumed process fails to start (one fallback, in the same request). One-off requests (compaction and summaries) never persist or resume a session.
 - **Pi's transcript is the source of truth.** The relay never reads Claude Code session files; they only let a replaced process pick up where the previous one stopped.
 - **Footer status.** From session start the footer shows the relay and the space's login (`✓ Claude relay · subscription`, `✓ Claude relay · API key`, or `✗ Claude relay · no Anthropic login in this space (/login)`). Footer colors follow Pi's theme: the `✓` lines stay uncolored, the `✗` line is `error`; when no theme is available the footer is plain text. Hosts that draw extension statuses in their own panel (Gentle Shell's INTEGRATIONS panel, for example) may show these lines without the colors.
-- **Rate limits.** Claude's `rate_limit_event` is exposed to Pi as `anthropic-ratelimit-unified-*` response headers, shown in the footer unless switched off with `/claude-relay status off` (`Claude 5h 16% · 7d 15%`, each window colored by its utilization like Pi's own context-usage footer: `error` above 90 %, `warning` above 70 %, otherwise `success`; `Claude limit reached · …` is `error`, and the `resets in …` part of a warning is `warning`), and limit errors are worded so Pi's retry logic recognizes them: a transient rate limit (`429 rate limit: …`) is retried with Pi's backoff, while an exhausted usage window (`429 quota exceeded: You've hit your 5-hour limit · …`, or any error after a `rejected` rate-limit event for the same request) fails at once instead of being retried until the window resets.
+- **Rate limits.** Claude's `rate_limit_event` is exposed to Pi as `anthropic-ratelimit-unified-*` response headers, shown in the footer unless switched off with `/claude-relay status off` (`Claude 5h 16% (resets in 52m) · 7d 15% (resets in 8h 12m)`, the reset times shaped by `/claude-relay reset when|format`, each window colored by its utilization like Pi's own context-usage footer: `error` above 90 %, `warning` above 70 %, otherwise `success`; `Claude limit reached · …` is `error`, and the reset part of a warning is `warning`), and limit errors are worded so Pi's retry logic recognizes them: a transient rate limit (`429 rate limit: …`) is retried with Pi's backoff, while an exhausted usage window (`429 quota exceeded: You've hit your 5-hour limit · …`, or any error after a `rejected` rate-limit event for the same request) fails at once instead of being retried until the window resets.
 - **Tool schemas.** Top-level `anyOf`/`oneOf`/`allOf` tool schemas are flattened into one object schema that Claude accepts.
 
 ## Limitations

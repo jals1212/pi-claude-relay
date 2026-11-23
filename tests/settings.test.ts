@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, statSync, symlinkSync, lstatSync, chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSettings, DEFAULT_NOTIFY, relayArgumentCompletions } from "../src/settings.ts";
+import { COMMAND_USAGE, createSettings, DEFAULT_NOTIFY, relayArgumentCompletions, runRelayCommand } from "../src/settings.ts";
 
 test("missing file → both notifications on; load never throws", () => {
 	const dir = mkdtempSync(join(tmpdir(), "relay-settings-"));
@@ -153,7 +153,7 @@ test("a later successful save of one switch does not undo an unsaved change of a
 }));
 
 test("completions offer timing and its on/off", () => {
-	assert.deepEqual(relayArgumentCompletions("")?.map((i) => i.value), ["notify", "stats", "timing", "status"]);
+	assert.deepEqual(relayArgumentCompletions("")?.map((i) => i.value), ["notify", "stats", "timing", "status", "reset"]);
 	assert.deepEqual(relayArgumentCompletions("ti")?.map((i) => i.value), ["timing"]);
 	assert.deepEqual(relayArgumentCompletions("timing ")?.map((i) => i.value), ["timing on", "timing off"]);
 	assert.equal(relayArgumentCompletions("timing on "), null);
@@ -206,4 +206,64 @@ test("completions offer status and its on/off", () => {
 	assert.deepEqual(relayArgumentCompletions("status")?.map((i) => i.value), ["status"]);
 	assert.deepEqual(relayArgumentCompletions("status ")?.map((i) => i.value), ["status on", "status off"]);
 	assert.equal(relayArgumentCompletions("status on "), null);
+});
+
+test("reset settings default to always and full; a missing, corrupt or unknown value means the default", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	const read = () => { const s = createSettings(file); return [s.resetWhen(), s.resetFormat()]; };
+	assert.deepEqual(read(), ["always", "full"]);
+	writeFileSync(file, "garbage");
+	assert.deepEqual(read(), ["always", "full"]);
+	for (const v of [{ resetWhen: "NEAR", resetFormat: "Compact" }, { resetWhen: "off", resetFormat: "off" }, { resetWhen: 1, resetFormat: null }, "near", {}]) { writeFileSync(file, JSON.stringify({ status: v })); assert.deepEqual(read(), ["always", "full"], JSON.stringify(v)); }
+	writeFileSync(file, JSON.stringify({ status: { resetWhen: "near", resetFormat: "compact" } }));
+	assert.deepEqual(read(), ["near", "compact"]);
+	writeFileSync(file, JSON.stringify({ status: { resetWhen: "never" } }));
+	assert.deepEqual(read(), ["never", "full"]);
+}));
+
+test("setResetWhen and setResetFormat persist under status next to status.usage and unknown keys", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	writeFileSync(file, JSON.stringify({ other: 1, status: { usage: false, future: "x" } }));
+	const s = createSettings(file);
+	assert.equal(s.setResetWhen("near"), true);
+	assert.equal(s.setResetFormat("compact"), true);
+	assert.deepEqual([s.resetWhen(), s.resetFormat()], ["near", "compact"]);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { other: 1, status: { usage: false, future: "x", resetWhen: "near", resetFormat: "compact" } });
+	const t = createSettings(file);
+	assert.deepEqual([t.resetWhen(), t.resetFormat(), t.usageStatus()], ["near", "compact", false]);
+}));
+
+test("/claude-relay reset shows both, sets when or format and repaints; invalid input warns with the usage and changes nothing", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	const s = createSettings(file);
+	const notes: [string, string | undefined][] = [];
+	let repaints = 0;
+	const run = (args: string) => runRelayCommand(args, s, { notify: (m, t) => notes.push([m, t]) }, undefined, undefined, () => repaints++);
+	run("reset");
+	assert.deepEqual(notes.pop(), ["Claude relay reset time in status bar: always, full", "info"]);
+	run("reset when Near");
+	assert.deepEqual(notes.pop(), ["Claude relay reset time in status bar: near, full", "info"]);
+	run("reset format compact");
+	assert.deepEqual(notes.pop(), ["Claude relay reset time in status bar: near, compact", "info"]);
+	assert.equal(repaints, 2);
+	const saved = { status: { resetWhen: "near", resetFormat: "compact" } };
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), saved);
+	for (const bad of ["reset compact", "reset when", "reset when off", "reset format never", "reset format full now", "reset maybe full"]) {
+		run(bad);
+		assert.deepEqual(notes.pop(), [COMMAND_USAGE, "warning"], bad);
+	}
+	assert.equal(repaints, 2);
+	assert.deepEqual([s.resetWhen(), s.resetFormat()], ["near", "compact"]);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), saved);
+	run("reset when never");
+	assert.equal(s.resetWhen(), "never");
+	assert.equal(repaints, 3);
+}));
+
+test("completions offer reset, its when/format and their values", () => {
+	assert.deepEqual(relayArgumentCompletions("re")?.map((i) => i.value), ["reset"]);
+	assert.deepEqual(relayArgumentCompletions("reset ")?.map((i) => i.value), ["reset when", "reset format"]);
+	assert.deepEqual(relayArgumentCompletions("reset when ")?.map((i) => i.value), ["reset when always", "reset when near", "reset when never"]);
+	assert.deepEqual(relayArgumentCompletions("reset format c")?.map((i) => i.value), ["reset format compact"]);
+	assert.equal(relayArgumentCompletions("reset format full "), null);
 });

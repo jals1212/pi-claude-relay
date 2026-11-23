@@ -1,7 +1,7 @@
 // `/claude-relay` with no arguments opens a settings menu in Pi's own /settings style (pi-tui `SettingsList`).
 // No runtime Pi imports here: the pi-tui pieces are loaded lazily (`loadTuiLib`) and injected, so the item list and the
 // toggle handling are unit-testable without a terminal, and a Pi without a usable TUI falls back to the text command.
-import type { NotifyKind, Settings } from "./settings.ts";
+import { RESET_FORMATS, RESET_WHENS, type NotifyKind, type ResetFormat, type ResetWhen, type Settings } from "./settings.ts";
 import { statsText, type Stats } from "./stats.ts";
 import { timingSummaryLines, type Timing } from "./timing.ts";
 
@@ -33,14 +33,14 @@ export async function loadTuiLib(): Promise<TuiLib> {
 	return { SettingsList: tui.SettingsList as any, truncateToWidth: tui.truncateToWidth as any, getSettingsListTheme: pi.getSettingsListTheme as any };
 }
 
-export const MENU_IDS = { warning: "notify.warning", limit: "notify.limit", usage: "status.usage", timing: "timing", stats: "stats", latency: "latency" } as const;
+export const MENU_IDS = { warning: "notify.warning", limit: "notify.limit", usage: "status.usage", resetWhen: "status.resetWhen", resetFormat: "status.resetFormat", timing: "timing", stats: "stats", latency: "latency" } as const;
 const onOff = (on: boolean) => (on ? "on" : "off");
 
 export interface MenuDeps {
 	settings: Settings;
 	stats?: Pick<Stats, "summary">;
 	timing?: Pick<Timing, "file" | "summary">;
-	/** Called after the usage-in-status-bar switch changed (saved or not), so the live footer follows at once. */
+	/** Called after the usage-in-status-bar switch or the reset-time settings changed (saved or not), so the live footer follows at once. */
 	onUsageStatus?: () => void;
 	/** Defaults to `loadTuiLib`. */
 	loadLib?: () => Promise<TuiLib>;
@@ -64,6 +64,8 @@ export function menuItems(d: MenuDeps, truncate: TuiLib["truncateToWidth"]): Men
 		{ id: MENU_IDS.warning, label: "Usage warning pop-up", description: "Pop-up when you approach a Claude usage limit.", currentValue: onOff(notify.warning), values: ["on", "off"] },
 		{ id: MENU_IDS.limit, label: "Usage limit pop-up", description: "Pop-up when a Claude usage limit is reached.", currentValue: onOff(notify.limit), values: ["on", "off"] },
 		{ id: MENU_IDS.usage, label: "Usage in status bar", description: "Show Claude usage (5h / 7d) in the footer status. Off shows the login line instead; pop-ups are not affected.", currentValue: onOff(d.settings.usageStatus()), values: ["on", "off"] },
+		{ id: MENU_IDS.resetWhen, label: "Reset time in status bar", description: "When each usage window shows when it resets: always, only near a limit, or never. A reached limit always shows it.", currentValue: d.settings.resetWhen(), values: [...RESET_WHENS] },
+		{ id: MENU_IDS.resetFormat, label: "Reset time format", description: "full \"5h 63% (resets in 52m)\" or compact \"5h 63% ↻52m\".", currentValue: d.settings.resetFormat(), values: [...RESET_FORMATS] },
 		{ id: MENU_IDS.timing, label: "Latency timing", description: `Record per-request latency (no prompt text) to ${d.timing?.file ?? "<agent home>/claude-relay-timing.jsonl"}. Off by default.`, currentValue: onOff(d.settings.timing()), values: ["on", "off"] },
 	];
 	if (d.stats) { const stats = d.stats; items.push({ id: MENU_IDS.stats, label: "Prompt-cache stats", description: "Enter to view.", currentValue: "view", submenu: infoView(() => statsText(stats.summary()).split("\n"), truncate) }); }
@@ -76,6 +78,8 @@ export function menuItems(d: MenuDeps, truncate: TuiLib["truncateToWidth"]): Men
 
 /** Applies a value chosen in the menu through the Settings object (which persists it). Returns false when it could not be saved, undefined for an unknown id. */
 export function applyMenuChange(id: string, value: string, settings: Settings): boolean | undefined {
+	if (id === MENU_IDS.resetWhen) return (RESET_WHENS as readonly string[]).includes(value) ? settings.setResetWhen(value as ResetWhen) : undefined;
+	if (id === MENU_IDS.resetFormat) return (RESET_FORMATS as readonly string[]).includes(value) ? settings.setResetFormat(value as ResetFormat) : undefined;
 	if (value !== "on" && value !== "off") return undefined;
 	const on = value === "on";
 	if (id === MENU_IDS.timing) return settings.setTiming(on);
@@ -108,7 +112,7 @@ export async function openRelayMenu(ctx: MenuCtx | undefined, d: MenuDeps): Prom
 				(id, value) => {
 					let saved: boolean | undefined;
 					try { saved = applyMenuChange(id, value, d.settings); } catch { saved = false; }
-					if (id === MENU_IDS.usage && saved !== undefined) { try { d.onUsageStatus?.(); } catch { /* the footer must never break the menu */ } }
+					if ((id === MENU_IDS.usage || id === MENU_IDS.resetWhen || id === MENU_IDS.resetFormat) && saved !== undefined) { try { d.onUsageStatus?.(); } catch { /* the footer must never break the menu */ } }
 					if (saved === false) { try { ui.notify?.("Could not save the setting; it applies until Pi restarts.", "warning"); } catch { /* ignore */ } }
 				},
 				() => done(undefined),

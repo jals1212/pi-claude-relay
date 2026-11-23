@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- The footer status shows when each usage window resets: `Claude 5h 63% (resets in 52m) · 7d 74% (resets in 8h 12m)`. Before, the reset time appeared only for a warning or a reached limit. Two settings in the `/claude-relay` menu shape it. **Reset time in status bar** (`/claude-relay reset when always|near|never`) chooses when: `always` (default), only `near` a limit (Claude's warning state; just the window near its limit), or `never`. **Reset time format** (`/claude-relay reset format full|compact`) chooses how: `full` (default) or `compact` (`Claude 5h 63% ↻52m · 7d 74% ↻8h 12m`). Saved per Pi space as `status.resetWhen` and `status.resetFormat` in `claude-relay-settings.json`. A reached limit always shows its reset time. The reset times are recomputed from the current time whenever the footer is repainted.
+
 ## 0.2.1
 
 No changes to the code: it is the same as 0.2.0.

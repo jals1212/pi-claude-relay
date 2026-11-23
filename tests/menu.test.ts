@@ -185,3 +185,43 @@ test("openRelayMenu: toggling usage status applies it at once (hook runs after t
 		assert.deepEqual(seen2, [1]);
 	} finally { r.done(); }
 });
+
+test("menu: 'Reset time in status bar' cycles always/near/never and 'Reset time format' full/compact, right after usage", () => {
+	const r = rig();
+	try {
+		let items = menuItems(r.deps, truncate);
+		const i = items.findIndex((x) => x.id === MENU_IDS.resetWhen);
+		assert.deepEqual([items[i].label, items[i].currentValue, items[i].values], ["Reset time in status bar", "always", ["always", "near", "never"]]);
+		assert.deepEqual([items[i + 1].id, items[i + 1].label, items[i + 1].currentValue, items[i + 1].values], [MENU_IDS.resetFormat, "Reset time format", "full", ["full", "compact"]]);
+		assert.equal(items[i - 1].id, MENU_IDS.usage);
+		r.settings.setResetWhen("never");
+		r.settings.setResetFormat("compact");
+		items = menuItems(r.deps, truncate);
+		assert.deepEqual([items[i].currentValue, items[i + 1].currentValue], ["never", "compact"]);
+	} finally { r.done(); }
+});
+
+test("applyMenuChange sets the reset when and format and persists them; values of another item are rejected", () => {
+	const r = rig();
+	try {
+		assert.equal(applyMenuChange(MENU_IDS.resetWhen, "near", r.settings), true);
+		assert.equal(applyMenuChange(MENU_IDS.resetFormat, "compact", r.settings), true);
+		assert.deepEqual(JSON.parse(readFileSync(r.file, "utf8")), { status: { resetWhen: "near", resetFormat: "compact" } });
+		assert.equal(applyMenuChange(MENU_IDS.resetWhen, "compact", r.settings), undefined);
+		assert.equal(applyMenuChange(MENU_IDS.resetFormat, "never", r.settings), undefined);
+		assert.equal(applyMenuChange(MENU_IDS.usage, "near", r.settings), undefined);
+		const t = createSettings(r.file);
+		assert.deepEqual([t.resetWhen(), t.resetFormat(), t.usageStatus()], ["near", "compact", true]);
+	} finally { r.done(); }
+});
+
+test("openRelayMenu: changing either reset setting repaints the footer at once", async () => {
+	const r = rig();
+	try {
+		const seen: string[] = [];
+		await openRelayMenu(r.ctx, { ...r.deps, onUsageStatus: () => seen.push(`${r.settings.resetWhen()},${r.settings.resetFormat()}`) });
+		FakeList.last.onChange(MENU_IDS.resetWhen, "near");
+		FakeList.last.onChange(MENU_IDS.resetFormat, "compact");
+		assert.deepEqual(seen, ["near,full", "near,compact"]);
+	} finally { r.done(); }
+});

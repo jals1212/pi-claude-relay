@@ -35,7 +35,7 @@ test("headers tolerate a minimal info and ignore garbage", () => {
 test("allowed: short footer with utilization, no notification", () => {
 	const d = describeRateLimitHeaders(anthropicRateLimitHeaders(info()), NOW)!;
 	assert.equal(d.severity, "ok");
-	assert.equal(d.footer, "Claude 5h 14% · 7d 50%");
+	assert.equal(d.footer, "Claude 5h 14% (resets in 2h 5m) · 7d 50% (resets in 2d 7h)");
 	assert.equal(d.message, undefined);
 });
 
@@ -47,8 +47,25 @@ test("allowed without utilization: footer is just ok", () => {
 test("allowed_warning: warning message with window, utilization and reset time", () => {
 	const d = describeRateLimitHeaders(anthropicRateLimitHeaders(info({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: 0.91, resetsAt: NOW / 1000 + 2400, status: "allowed_warning" } }, resetsAt: NOW / 1000 + 2400 })), NOW)!;
 	assert.equal(d.severity, "warning");
-	assert.match(d.footer, /^Claude 5h 91% · resets in 40m$/);
+	assert.match(d.footer, /^Claude 5h 91% \(resets in 40m\)$/);
 	assert.match(d.message!, /^Claude usage warning \(5-hour window\): 91% used\. Resets in 40m \(.+\)\.$/);
+});
+
+test("every window shows its own reset time; a window without one shows none; the overall reset is only a fallback", () => {
+	const d = describeRateLimitHeaders(anthropicRateLimitHeaders(info({ unifiedWindows: { five_hour: { utilization: 0.63, resetsAt: NOW / 1000 + 52 * 60 }, seven_day: { utilization: 0.74 } } })), NOW)!;
+	assert.equal(d.footer, "Claude 5h 63% (resets in 52m) · 7d 74%");
+	const w = describeRateLimitHeaders(anthropicRateLimitHeaders(info({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: 0.91 } }, resetsAt: NOW / 1000 + 2400 })), NOW)!;
+	assert.equal(w.footer, "Claude 5h 91% · resets in 40m");
+});
+
+test("refresh recomputes the reset times from the current clock", () => {
+	const clock = { now: NOW };
+	const handle = createRateLimitHandler({ now: () => clock.now });
+	const { status, ctx } = fakeCtx();
+	handle(evOf(info()), ctx);
+	clock.now = NOW + 60 * 60_000;
+	handle.refresh(ctx);
+	assert.deepEqual(status.at(-1), ["claude-relay", "Claude 5h 14% (resets in 1h 5m) · 7d 50% (resets in 2d 6h)"]);
 });
 
 test("rejected: error message and footer with reset", () => {
@@ -74,7 +91,7 @@ test("handler sets the footer on every response and notifies only for non-allowe
 	const ev = (i: any, code = 200) => ({ status: code, headers: anthropicRateLimitHeaders(i) });
 	handle(ev(info()), ctx);
 	assert.deepEqual(notes, []);
-	assert.deepEqual(status, [["claude-relay", "Claude 5h 14% · 7d 50%"]]);
+	assert.deepEqual(status, [["claude-relay", "Claude 5h 14% (resets in 2h 5m) · 7d 50% (resets in 2d 7h)"]]);
 	handle(ev(info({ status: "allowed_warning" })), ctx);
 	handle(ev(info({ status: "allowed_warning" })), ctx);
 	assert.equal(notes.length, 1);
@@ -188,31 +205,31 @@ function footerWith(i: any, theme: any, now = NOW) {
 }
 
 test("allowed: each window is colored by its own utilization", () => {
-	assert.deepEqual(footerWith(win(0.14, 0.5), fake), [["claude-relay", "Claude <success>5h 14%</success> · <success>7d 50%</success>"]]);
-	assert.deepEqual(footerWith(win(0.14, 0.75), fake), [["claude-relay", "Claude <success>5h 14%</success> · <warning>7d 75%</warning>"]]);
-	assert.deepEqual(footerWith(win(0.91, 0.5), fake), [["claude-relay", "Claude <error>5h 91%</error> · <success>7d 50%</success>"]]);
+	assert.deepEqual(footerWith(win(0.14, 0.5), fake), [["claude-relay", "Claude <success>5h 14%</success> (resets in 2h 5m) · <success>7d 50%</success> (resets in 2d 7h)"]]);
+	assert.deepEqual(footerWith(win(0.14, 0.75), fake), [["claude-relay", "Claude <success>5h 14%</success> (resets in 2h 5m) · <warning>7d 75%</warning> (resets in 2d 7h)"]]);
+	assert.deepEqual(footerWith(win(0.91, 0.5), fake), [["claude-relay", "Claude <error>5h 91%</error> (resets in 2h 5m) · <success>7d 50%</success> (resets in 2d 7h)"]]);
 });
 
 test("rejected: the whole footer is error; warning state: windows by utilization and resets-in as warning", () => {
 	assert.deepEqual(footerWith({ status: "rejected", resetsAt: NOW / 1000 + 7500 }, fake), [["claude-relay", "<error>Claude limit reached · resets in 2h 5m</error>"]]);
 	const w = info({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: 0.91, resetsAt: NOW / 1000 + 2400, status: "allowed_warning" } }, resetsAt: NOW / 1000 + 2400 });
-	assert.deepEqual(footerWith(w, fake), [["claude-relay", "Claude <error>5h 91%</error> · <warning>resets in 40m</warning>"]]);
+	assert.deepEqual(footerWith(w, fake), [["claude-relay", "Claude <error>5h 91%</error> <warning>(resets in 40m)</warning>"]]);
 });
 
 test("no theme, a throwing theme, or a throwing theme getter: today's plain strings, nothing thrown", () => {
-	assert.deepEqual(footerWith(win(0.14, 0.5), undefined), [["claude-relay", "Claude 5h 14% · 7d 50%"]]);
-	assert.deepEqual(footerWith(win(0.14, 0.5), { fg() { throw new Error("boom"); } }), [["claude-relay", "Claude 5h 14% · 7d 50%"]]);
+	assert.deepEqual(footerWith(win(0.14, 0.5), undefined), [["claude-relay", "Claude 5h 14% (resets in 2h 5m) · 7d 50% (resets in 2d 7h)"]]);
+	assert.deepEqual(footerWith(win(0.14, 0.5), { fg() { throw new Error("boom"); } }), [["claude-relay", "Claude 5h 14% (resets in 2h 5m) · 7d 50% (resets in 2d 7h)"]]);
 	const status: any[] = [];
 	const ui = { setStatus: (...a: any[]) => status.push(a), get theme(): any { throw new Error("no theme"); } };
 	createRateLimitHandler({ now: () => NOW })({ headers: anthropicRateLimitHeaders(win(0.14, 0.5)) }, { ui } as any);
-	assert.deepEqual(status, [["claude-relay", "Claude 5h 14% · 7d 50%"]]);
+	assert.deepEqual(status, [["claude-relay", "Claude 5h 14% (resets in 2h 5m) · 7d 50% (resets in 2d 7h)"]]);
 	assert.deepEqual(footerWith({ status: "rejected", resetsAt: NOW / 1000 + 7500 }, undefined), [["claude-relay", "Claude limit reached · resets in 2h 5m"]]);
 });
 
 test("described footer stays plain text and exposes colored segments", () => {
 	const d = describeRateLimitHeaders(anthropicRateLimitHeaders(win(0.14, 0.75)), NOW)!;
-	assert.equal(d.footer, "Claude 5h 14% · 7d 75%");
-	assert.equal(paint(d.segments, fake), "Claude <success>5h 14%</success> · <warning>7d 75%</warning>");
+	assert.equal(d.footer, "Claude 5h 14% (resets in 2h 5m) · 7d 75% (resets in 2d 7h)");
+	assert.equal(paint(d.segments, fake), "Claude <success>5h 14%</success> (resets in 2h 5m) · <warning>7d 75%</warning> (resets in 2d 7h)");
 });
 
 // --- usage status switch ---
@@ -238,7 +255,7 @@ test("usage status is read on every response", () => {
 	assert.deepEqual(status, []);
 	on.v = true;
 	handle(evOf(info()), ctx);
-	assert.deepEqual(status, [["claude-relay", "Claude 5h 14% · 7d 50%"]]);
+	assert.deepEqual(status, [["claude-relay", "Claude 5h 14% (resets in 2h 5m) · 7d 50% (resets in 2d 7h)"]]);
 });
 
 test("refresh: turning usage off restores the login line; turning it back on shows the last usage seen, even if seen while off", () => {
@@ -271,4 +288,41 @@ test("refresh with usage on and none seen yet shows the login line; it paints wi
 	assert.doesNotThrow(() => handle.refresh({ ui: { setStatus() { throw new Error("ui"); } } } as any));
 	const off = createRateLimitHandler({ usageStatus: () => false, login() { throw new Error("login"); } });
 	assert.doesNotThrow(() => off.refresh(ctx));
+});
+
+test("reset options: when always/near/never and format full/compact; warning colors the reset part; a reached limit always shows it", () => {
+	const d = (i: any, when: any, format: any = "full") => describeRateLimitHeaders(anthropicRateLimitHeaders(i), NOW, { when, format })!;
+	assert.equal(d(info(), "always", "compact").footer, "Claude 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
+	assert.equal(d(info(), "always").footer, "Claude 5h 14% (resets in 2h 5m) · 7d 50% (resets in 2d 7h)");
+	assert.equal(d(info(), "near").footer, "Claude 5h 14% · 7d 50%", "near: nothing while allowed");
+	assert.equal(d(info(), "never").footer, "Claude 5h 14% · 7d 50%");
+	const w = info({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: 0.91, resetsAt: NOW / 1000 + 2400 } }, resetsAt: NOW / 1000 + 2400 });
+	assert.equal(paint(d(w, "near", "compact").segments, fake), "Claude <error>5h 91%</error> <warning>↻40m</warning>");
+	assert.equal(d(w, "near").footer, "Claude 5h 91% (resets in 40m)");
+	assert.equal(d(w, "never").footer, "Claude 5h 91%", "never: not even near a limit");
+	const wNoWindowReset = info({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: 0.91 } }, resetsAt: NOW / 1000 + 2400 });
+	assert.equal(d(wNoWindowReset, "near").footer, "Claude 5h 91% · resets in 40m", "the overall reset is the fallback");
+	assert.equal(d(wNoWindowReset, "never").footer, "Claude 5h 91%");
+	for (const when of ["always", "near", "never"]) assert.equal(d({ status: "rejected", resetsAt: NOW / 1000 + 7500 }, when).footer, "Claude limit reached · resets in 2h 5m");
+});
+
+test("the handler follows the reset settings on every response and on refresh", () => {
+	const reset = { v: { when: "always", format: "compact" } as any };
+	const handle = createRateLimitHandler({ now: () => NOW, reset: () => reset.v });
+	const { status, ctx } = fakeCtx();
+	handle(evOf(info()), ctx);
+	assert.deepEqual(status.at(-1), ["claude-relay", "Claude 5h 14% ↻2h 5m · 7d 50% ↻2d 7h"]);
+	reset.v = { when: "near", format: "compact" };
+	handle.refresh(ctx);
+	assert.deepEqual(status.at(-1), ["claude-relay", "Claude 5h 14% · 7d 50%"]);
+});
+
+test("reset when near: only the window near its own limit shows its reset time; every window when none reports a status", () => {
+	const w = (u5: number, s5: string, s7: string) => info({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: u5, resetsAt: NOW / 1000 + 2400, status: s5 }, seven_day: { utilization: 0.5, resetsAt: NOW / 1000 + 200_000, status: s7 } } });
+	const d = (i: any, format: any = "compact") => describeRateLimitHeaders(anthropicRateLimitHeaders(i), NOW, { when: "near", format })!.footer;
+	assert.equal(d(w(0.91, "allowed_warning", "allowed")), "Claude 5h 91% ↻40m · 7d 50%");
+	assert.equal(d(w(0.91, "allowed", "allowed_warning"), "full"), "Claude 5h 91% · 7d 50% (resets in 2d 7h)");
+	const noStatus = info({ status: "allowed_warning", unifiedWindows: { five_hour: { utilization: 0.91, resetsAt: NOW / 1000 + 2400 }, seven_day: { utilization: 0.5, resetsAt: NOW / 1000 + 200_000 } } });
+	assert.equal(d(noStatus), "Claude 5h 91% ↻40m · 7d 50% ↻2d 7h");
+	assert.equal(describeRateLimitHeaders(anthropicRateLimitHeaders(w(0.91, "allowed_warning", "allowed")), NOW, { when: "always", format: "compact" })!.footer, "Claude 5h 91% ↻40m · 7d 50% ↻2d 7h", "always ignores the per-window status");
 });

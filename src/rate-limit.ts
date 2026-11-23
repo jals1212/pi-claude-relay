@@ -4,6 +4,7 @@
 // and show a short footer status plus a warning when the state is not "allowed".
 
 import { paint, plain, themeOf, utilizationColor, type Segment } from "./footer-color.ts";
+import type { ResetFormat, ResetWhen } from "./settings.ts";
 
 const H = "anthropic-ratelimit-unified-";
 const WINDOWS: Record<string, string> = { five_hour: "5h", seven_day: "7d" };
@@ -81,16 +82,50 @@ const join = (parts: Segment[][]): Segment[] => parts.flatMap((p, i) => (i ? [SE
 const described = (status: string, severity: RateLimitDescription["severity"], signature: string, segments: Segment[], message?: string): RateLimitDescription =>
 	({ status, severity, signature, segments, footer: plain(segments), ...(message ? { message } : {}) });
 
-export function describeRateLimitHeaders(headers: Record<string, string>, nowMs = Date.now()): RateLimitDescription | undefined {
+const resetMsOf = (v: string | undefined) => { const n = v === undefined || v === "" ? NaN : Number(v); return Number.isFinite(n) ? n * 1000 : undefined; };
+
+/** When the footer shows reset times (`always`, only `near` a limit, or `never`) and how (`full` or `compact`). */
+export interface ResetOptions { when: ResetWhen; format: ResetFormat }
+export const DEFAULT_RESET: ResetOptions = { when: "always", format: "full" };
+
+/**
+ * Footer segments for the usage windows. A window `show` picks gets its own reset time (`(resets in 52m)` / `↻52m`),
+ * colored `warning` while the state is a warning; a window without a reset time shows only its utilization.
+ */
+function windowSegments(get: (name: string) => string | undefined, nowMs: number, show: (abbr: string) => boolean, format: ResetFormat, warn: boolean): { segments: Segment[][]; withReset: boolean } {
+	let withReset = false;
+	const segments = ["5h", "7d"].flatMap((abbr) => {
+		const u = get(`${abbr}-utilization`), p = percent(u);
+		if (!p) return [];
+		const seg: Segment[] = [{ text: `${abbr} ${p}`, color: utilizationColor(fraction(u)!) }];
+		const ms = !show(abbr) ? undefined : resetMsOf(get(`${abbr}-reset`));
+		if (ms !== undefined) {
+			withReset = true;
+			const rel = relative(ms - nowMs);
+			const text = format === "compact" ? `↻${rel}` : `(resets in ${rel})`;
+			seg.push({ text: " " }, warn ? { text, color: "warning" } : { text });
+		}
+		return [seg];
+	});
+	return { segments, withReset };
+}
+
+/**
+ * `reset` chooses when (`always` by default, only `near` a limit, or `never`) and how (`full` by default, or `compact`) the footer shows
+ * each window's reset time. A reached limit always shows its reset time.
+ */
+export function describeRateLimitHeaders(headers: Record<string, string>, nowMs = Date.now(), reset: ResetOptions = DEFAULT_RESET): RateLimitDescription | undefined {
 	const get = (name: string) => headers[H + name];
 	const status = get("status");
 	if (!status) return undefined;
 	const claim = get("representative-claim");
 	const claimName = claim ? CLAIM_NAMES[claim] ?? claim : undefined;
-	const windows: Segment[][] = ["5h", "7d"].flatMap((abbr) => {
-		const u = get(`${abbr}-utilization`), p = percent(u);
-		return p ? [[{ text: `${abbr} ${p}`, color: utilizationColor(fraction(u)!) }]] : [];
-	});
+	const warn = status !== "allowed" && status !== "rejected";
+	const show = reset.when === "always" || (reset.when === "near" && warn);
+	// `near`: only the windows near their own limit (their own status is not `allowed`); every window when none reports a status.
+	const statuses = ["5h", "7d"].map((abbr) => get(`${abbr}-status`)).filter((s) => s !== undefined);
+	const nearWindow = (abbr: string) => statuses.length === 0 || (get(`${abbr}-status`) ?? "allowed") !== "allowed";
+	const { segments: windows, withReset } = windowSegments(get, nowMs, (abbr) => show && (reset.when === "always" || nearWindow(abbr)), reset.format, warn);
 	const resetSec = Number(get("reset"));
 	const resetMs = get("reset") && Number.isFinite(resetSec) ? resetSec * 1000 : undefined;
 	const resetRel = resetMs === undefined ? undefined : relative(resetMs - nowMs);
@@ -106,7 +141,8 @@ export function describeRateLimitHeaders(headers: Record<string, string>, nowMs 
 		return described(status, "ok", signature, [{ text: "Claude " }, ...(windows.length ? join(windows) : [{ text: "ok", color: "success" as const }])]);
 	}
 	const claimPct = percent(get(`${claim === "seven_day" ? "7d" : "5h"}-utilization`));
-	const parts = [...windows, ...(resetRel ? [[{ text: `resets in ${resetRel}`, color: "warning" as const }]] : [])];
+	// The overall reset time is only a fallback for when no window shows its own.
+	const parts = [...windows, ...(resetRel && show && !withReset ? [[{ text: `resets in ${resetRel}`, color: "warning" as const }]] : [])];
 	return described(status, "warning", signature,
 		[{ text: "Claude " }, ...(parts.length ? join(parts) : [{ text: status, color: "warning" as const }])],
 		`Claude usage warning${claimName ? ` (${claimName} window)` : ""}${claimPct ? `: ${claimPct} used` : ""}.${resetText}`);
@@ -117,16 +153,17 @@ interface UiLike { setStatus?(id: string, text: string | undefined): void; notif
 /**
  * `after_provider_response` handler: footer on every response carrying Anthropic unified headers (unless `usageStatus` is off), notify on state changes
  * (each pop-up kind can be switched off on its own; the footer switch does not affect them).
- * The last usage seen is kept even while the footer is off; `refresh(ctx)` re-applies the footer after the switch changed:
+ * The last usage seen is kept even while the footer is off (its reset times are recomputed on refresh); `refresh(ctx)` re-applies the footer after the switch changed:
  * usage on and one seen → that usage; otherwise `login(ctx)` puts the login line back (the line session start shows under the same status id).
  */
-export function createRateLimitHandler(opts: { now?: () => number; notifications?: () => { warning: boolean; limit: boolean }; usageStatus?: () => boolean; login?: (ctx: { ui?: UiLike }) => void } = {}) {
+export function createRateLimitHandler(opts: { now?: () => number; notifications?: () => { warning: boolean; limit: boolean }; usageStatus?: () => boolean; reset?: () => ResetOptions; login?: (ctx: { ui?: UiLike }) => void } = {}) {
 	let lastNotified: string | undefined;
-	let lastSegments: Segment[] | undefined;
+	let lastHeaders: Record<string, string> | undefined;
+	const describe = (headers: Record<string, string>) => describeRateLimitHeaders(headers, (opts.now ?? Date.now)(), opts.reset?.() ?? DEFAULT_RESET);
 	const handler = (event: { status?: number; headers?: Record<string, string> }, ctx: { ui?: UiLike }) => {
-		const d = describeRateLimitHeaders(event?.headers ?? {}, (opts.now ?? Date.now)());
+		const d = describe(event?.headers ?? {});
 		if (!d) return;
-		lastSegments = d.segments;
+		lastHeaders = event!.headers!;
 		try {
 			if (opts.usageStatus?.() ?? true) ctx.ui?.setStatus?.(STATUS_ID, paint(d.segments, themeOf(ctx)));
 			const enabled = opts.notifications?.() ?? { warning: true, limit: true };
@@ -138,7 +175,9 @@ export function createRateLimitHandler(opts: { now?: () => number; notifications
 	};
 	handler.refresh = (ctx: { ui?: UiLike } | undefined) => {
 		try {
-			if ((opts.usageStatus?.() ?? true) && lastSegments) ctx?.ui?.setStatus?.(STATUS_ID, paint(lastSegments, themeOf(ctx)));
+			// Re-described from the last headers: the reset times count from now and follow the current display settings.
+			const d = lastHeaders && describe(lastHeaders);
+			if ((opts.usageStatus?.() ?? true) && d) ctx?.ui?.setStatus?.(STATUS_ID, paint(d.segments, themeOf(ctx)));
 			else if (ctx) opts.login?.(ctx);
 		} catch { /* UI problems must never break a command */ }
 	};
