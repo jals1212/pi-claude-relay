@@ -180,7 +180,7 @@ test("result error before any message fails the turn with claude's message", asy
 test("result error with a structured 429 or limit wording gets a message Pi's retry classifier recognises", async () => {
 	for (const [result, extra, expected] of [
 		["Something odd", { api_error_status: 429 }, "429 rate limit: Something odd"],
-		["You've hit your limit · resets 5pm", {}, "429 rate limit: You've hit your limit · resets 5pm"],
+		["You've hit your 5-hour limit · resets 5pm", { api_error_status: 429 }, "429 quota exceeded: You've hit your 5-hour limit · resets 5pm"],
 		["Invalid model", { api_error_status: 400 }, "Invalid model"],
 	] as const) {
 		const { session, procs } = setup();
@@ -189,13 +189,13 @@ test("result error with a structured 429 or limit wording gets a message Pi's re
 	}
 });
 
-test("a rejected rate_limit_event before an error result marks the error as a rate limit", async () => {
+test("a rejected rate_limit_event before an error result marks the error as an exhausted quota Pi does not retry", async () => {
 	const { session, procs } = setup();
 	const events = await turn(session, [u("hola")], () => {
 		procs[0].emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 9 } });
 		procs[0].emit({ type: "result", subtype: "success", is_error: true, result: "Overloaded" });
 	});
-	assert.equal((events[0] as any).error.errorMessage, "429 rate limit: Overloaded");
+	assert.equal((events[0] as any).error.errorMessage, "429 quota exceeded: Overloaded");
 });
 
 test("process exit mid-turn fails the turn and the next turn respawns", async () => {

@@ -133,10 +133,34 @@ test("retryableRateLimitMessage: 429/rate limit text is kept as is", () => {
 	assert.equal(retryableRateLimitMessage("Rate limit reached", {}), "Rate limit reached");
 });
 
-test("retryableRateLimitMessage: structured 429 or limit wording gains a '429 rate limit' prefix Pi's retry classifier matches", () => {
+test("retryableRateLimitMessage: a structured 429 gains a '429 rate limit' prefix Pi's retry classifier matches", () => {
 	assert.equal(retryableRateLimitMessage("Something odd", { api_error_status: 429 }), "429 rate limit: Something odd");
-	assert.equal(retryableRateLimitMessage("You've hit your limit · resets 5pm", {}), "429 rate limit: You've hit your limit · resets 5pm");
-	assert.equal(retryableRateLimitMessage("Overloaded", {}, "rejected"), "429 rate limit: Overloaded");
+	assert.equal(retryableRateLimitMessage("Limit reached", {}), "429 rate limit: Limit reached");
+});
+
+// Pi's classifier (pi-ai utils/retry.js) refuses to retry errors that match its non-retryable quota patterns, `quota exceeded` among them.
+const PI_NON_RETRYABLE_QUOTA = /quota exceeded/i;
+
+test("retryableRateLimitMessage: an exhausted usage window is worded as a quota error Pi does not retry", () => {
+	const cases: [string, { api_error_status?: unknown }, string | undefined][] = [
+		["You've hit your 5-hour limit · resets 1:10am (America/Santo_Domingo)", { api_error_status: 429 }, undefined],
+		["You've hit your weekly limit · resets Nov 17, 3am (America/Santo_Domingo)", {}, undefined],
+		["You've hit your limit · resets 5pm", {}, undefined],
+		["Claude usage limit reached", {}, undefined],
+		["Overloaded", {}, "rejected"],
+		["API Error: 429 rate limited", { api_error_status: 429 }, "rejected"],
+	];
+	for (const [text, result, status] of cases) {
+		const out = retryableRateLimitMessage(text, result, status);
+		assert.equal(out, `429 quota exceeded: ${text}`);
+		assert.match(out, PI_NON_RETRYABLE_QUOTA);
+	}
+});
+
+test("retryableRateLimitMessage: a transient account rate limit stays retryable", () => {
+	const text = 'This request would exceed your account\'s rate limit. Please try again later.';
+	assert.equal(retryableRateLimitMessage(text, { api_error_status: 429 }, "allowed"), text);
+	assert.doesNotMatch(retryableRateLimitMessage("Something odd", { api_error_status: 429 }), PI_NON_RETRYABLE_QUOTA);
 });
 
 test("retryableRateLimitMessage: unrelated errors are untouched", () => {

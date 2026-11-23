@@ -132,12 +132,17 @@ export function createRateLimitHandler(opts: { now?: () => number; notifications
 }
 
 // Pi classifies assistant errors as retryable with /rate.?limit|too many requests|(?<![a-z0-9])429(?![a-z0-9])/ etc.
-// (pi-ai utils/retry.js). Make sure claude's rate-limit errors carry such a marker so normal retry/backoff applies.
+// (pi-ai utils/retry.js). Make sure claude's transient rate-limit errors carry such a marker so normal retry/backoff applies.
+// An exhausted usage window (5-hour, weekly) resets in hours, far beyond Pi's backoff: it is worded with `quota exceeded`,
+// one of Pi's non-retryable patterns, so Pi fails fast instead of spawning claude again for each retry.
 const PI_RETRYABLE_RATE_LIMIT = /rate.?limit|too many requests|(?<![a-z0-9])429(?![a-z0-9])/i;
-const CLAUDE_LIMIT_WORDING = /hit your limit|usage limit|limit reached/i;
+const PI_NON_RETRYABLE_QUOTA = /quota exceeded/i;
+const CLAUDE_QUOTA_WORDING = /hit your (?:[\w-]+ )?limit|usage limit/i;
+const CLAUDE_LIMIT_WORDING = /limit reached/i;
 
 export function retryableRateLimitMessage(text: string, result: { api_error_status?: unknown }, lastStatus?: string): string {
+	if (lastStatus === "rejected" || CLAUDE_QUOTA_WORDING.test(text)) return PI_NON_RETRYABLE_QUOTA.test(text) ? text : `429 quota exceeded: ${text}`;
 	if (PI_RETRYABLE_RATE_LIMIT.test(text)) return text;
-	if (result.api_error_status === 429 || lastStatus === "rejected" || CLAUDE_LIMIT_WORDING.test(text)) return `429 rate limit: ${text}`;
+	if (result.api_error_status === 429 || CLAUDE_LIMIT_WORDING.test(text)) return `429 rate limit: ${text}`;
 	return text;
 }

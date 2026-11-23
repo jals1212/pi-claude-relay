@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- An exhausted Claude usage window (the 5-hour or weekly limit) is no longer retried by Pi. The relay worded it `429 rate limit: …`, which Pi retries with a backoff of at most a minute, so every hit started `claude` again 7–9 times in under a minute for a limit that resets in hours. It is now worded `429 quota exceeded: …`, which Pi fails at once; transient rate limits keep the retryable `429 rate limit: …` wording.
+
 ## 0.1.5
 
 ### Fixed
