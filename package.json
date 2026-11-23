@@ -1,6 +1,6 @@
 {
   "name": "pi-claude-relay",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Pi extension that relays Pi's built-in Anthropic provider through the official Claude Code CLI (`claude -p` stream-json), with Pi tools served over a per-session local MCP server.",
   "license": "MIT",
   "author": "jals1212",
