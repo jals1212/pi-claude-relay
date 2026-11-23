@@ -214,3 +214,61 @@ test("described footer stays plain text and exposes colored segments", () => {
 	assert.equal(d.footer, "Claude 5h 14% · 7d 75%");
 	assert.equal(paint(d.segments, fake), "Claude <success>5h 14%</success> · <warning>7d 75%</warning>");
 });
+
+// --- usage status switch ---
+const evOf = (i: any, code = 200) => ({ status: code, headers: anthropicRateLimitHeaders(i) });
+const LOGIN = "✓ Claude relay · subscription";
+const loginInto = (ctx: any) => ctx.ui.setStatus("claude-relay", LOGIN);
+
+test("usage status off: the handler never writes the usage footer, but pop-ups still fire", () => {
+	const handle = createRateLimitHandler({ now: () => NOW, usageStatus: () => false });
+	const { status, notes, ctx } = fakeCtx();
+	handle(evOf(info()), ctx);
+	handle(evOf(info({ status: "allowed_warning" })), ctx);
+	handle(evOf(info({ status: "rejected" }), 429), ctx);
+	assert.deepEqual(status, []);
+	assert.deepEqual(notes.map((n) => n[1]), ["warning", "error"]);
+});
+
+test("usage status is read on every response", () => {
+	const on = { v: false };
+	const handle = createRateLimitHandler({ now: () => NOW, usageStatus: () => on.v });
+	const { status, ctx } = fakeCtx();
+	handle(evOf(info()), ctx);
+	assert.deepEqual(status, []);
+	on.v = true;
+	handle(evOf(info()), ctx);
+	assert.deepEqual(status, [["claude-relay", "Claude 5h 14% · 7d 50%"]]);
+});
+
+test("refresh: turning usage off restores the login line; turning it back on shows the last usage seen, even if seen while off", () => {
+	const on = { v: true };
+	const handle = createRateLimitHandler({ now: () => NOW, usageStatus: () => on.v, login: loginInto });
+	const { status, ctx } = fakeCtx();
+	handle(evOf(info()), ctx);
+	on.v = false;
+	handle.refresh(ctx);
+	assert.deepEqual(status.at(-1), ["claude-relay", LOGIN]);
+	handle(evOf(info({ unifiedWindows: { five_hour: { utilization: 0.2 }, seven_day: { utilization: 0.6 } } })), ctx); // seen while off
+	assert.equal(status.length, 2, "nothing written while off");
+	on.v = true;
+	handle.refresh(ctx);
+	assert.deepEqual(status.at(-1), ["claude-relay", "Claude 5h 20% · 7d 60%"]);
+});
+
+test("refresh with usage on and none seen yet shows the login line; it paints with the ctx theme; it never throws", () => {
+	const handle = createRateLimitHandler({ now: () => NOW, login: loginInto });
+	const { status, ctx } = fakeCtx();
+	handle.refresh(ctx);
+	assert.deepEqual(status, [["claude-relay", LOGIN]]);
+	const themed = { ui: { ...ctx.ui, theme: { fg: (c: string, t: string) => `<${c}>${t}</${c}>` } } } as any;
+	handle(evOf(info()), ctx);
+	status.length = 0;
+	handle.refresh(themed);
+	assert.match(status[0][1], /<success>5h 14%<\/success>/);
+	assert.doesNotThrow(() => handle.refresh({} as any));
+	assert.doesNotThrow(() => handle.refresh(undefined as any));
+	assert.doesNotThrow(() => handle.refresh({ ui: { setStatus() { throw new Error("ui"); } } } as any));
+	const off = createRateLimitHandler({ usageStatus: () => false, login() { throw new Error("login"); } });
+	assert.doesNotThrow(() => off.refresh(ctx));
+});

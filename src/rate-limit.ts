@@ -114,14 +114,21 @@ export function describeRateLimitHeaders(headers: Record<string, string>, nowMs 
 
 interface UiLike { setStatus?(id: string, text: string | undefined): void; notify?(message: string, type?: "info" | "warning" | "error"): void; readonly theme?: unknown }
 
-/** `after_provider_response` handler: footer on every response carrying Anthropic unified headers, notify on state changes (each pop-up kind can be switched off; the footer never is). */
-export function createRateLimitHandler(opts: { now?: () => number; notifications?: () => { warning: boolean; limit: boolean } } = {}) {
+/**
+ * `after_provider_response` handler: footer on every response carrying Anthropic unified headers (unless `usageStatus` is off), notify on state changes
+ * (each pop-up kind can be switched off on its own; the footer switch does not affect them).
+ * The last usage seen is kept even while the footer is off; `refresh(ctx)` re-applies the footer after the switch changed:
+ * usage on and one seen → that usage; otherwise `login(ctx)` puts the login line back (the line session start shows under the same status id).
+ */
+export function createRateLimitHandler(opts: { now?: () => number; notifications?: () => { warning: boolean; limit: boolean }; usageStatus?: () => boolean; login?: (ctx: { ui?: UiLike }) => void } = {}) {
 	let lastNotified: string | undefined;
-	return (event: { status?: number; headers?: Record<string, string> }, ctx: { ui?: UiLike }) => {
+	let lastSegments: Segment[] | undefined;
+	const handler = (event: { status?: number; headers?: Record<string, string> }, ctx: { ui?: UiLike }) => {
 		const d = describeRateLimitHeaders(event?.headers ?? {}, (opts.now ?? Date.now)());
 		if (!d) return;
+		lastSegments = d.segments;
 		try {
-			ctx.ui?.setStatus?.(STATUS_ID, paint(d.segments, themeOf(ctx)));
+			if (opts.usageStatus?.() ?? true) ctx.ui?.setStatus?.(STATUS_ID, paint(d.segments, themeOf(ctx)));
 			const enabled = opts.notifications?.() ?? { warning: true, limit: true };
 			const wanted = d.severity === "error" ? enabled.limit : enabled.warning;
 			if (d.message && wanted && d.signature !== lastNotified) ctx.ui?.notify?.(d.message, d.severity === "error" ? "error" : "warning");
@@ -129,6 +136,13 @@ export function createRateLimitHandler(opts: { now?: () => number; notifications
 			lastNotified = d.message && wanted ? d.signature : undefined;
 		} catch { lastNotified = d.message ? d.signature : undefined; /* UI problems must never break a turn */ }
 	};
+	handler.refresh = (ctx: { ui?: UiLike } | undefined) => {
+		try {
+			if ((opts.usageStatus?.() ?? true) && lastSegments) ctx?.ui?.setStatus?.(STATUS_ID, paint(lastSegments, themeOf(ctx)));
+			else if (ctx) opts.login?.(ctx);
+		} catch { /* UI problems must never break a command */ }
+	};
+	return handler;
 }
 
 // Pi classifies assistant errors as retryable with /rate.?limit|too many requests|(?<![a-z0-9])429(?![a-z0-9])/ etc.

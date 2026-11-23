@@ -123,7 +123,7 @@ test("opted out: no login status", () => {
 
 // --- /claude-relay notify (S6) ---
 const STATE = (w: string, l: string) => `Claude relay notifications: warning ${w}, limit ${l}`;
-const USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off]";
+const USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off]";
 
 function tmpSettings() {
 	const dir = mkdtempSync(join(tmpdir(), "relay-settings-"));
@@ -149,10 +149,12 @@ test("registers the claude-relay command with a description and argument complet
 		assert.equal(typeof cmd.handler, "function");
 		assert.equal(typeof cmd.description, "string");
 		const labels = (items: any) => (items ?? []).map((i: any) => i.value);
-		assert.deepEqual(labels(await cmd.getArgumentCompletions("")), ["notify", "stats", "timing"]);
+		assert.deepEqual(labels(await cmd.getArgumentCompletions("")), ["notify", "stats", "timing", "status"]);
+		assert.deepEqual(labels(await cmd.getArgumentCompletions("status ")), ["status on", "status off"]);
+		assert.match(cmd.description, /status/);
 		assert.deepEqual(labels(await cmd.getArgumentCompletions("timing ")), ["timing on", "timing off"]);
 		assert.ok(/timing/.test(cmd.description) && /notify/.test(cmd.description) && /stats/.test(cmd.description));
-		assert.deepEqual(labels(await cmd.getArgumentCompletions("st")), ["stats"]);
+		assert.deepEqual(labels(await cmd.getArgumentCompletions("st")), ["stats", "status"]);
 		assert.equal(await cmd.getArgumentCompletions("stats "), null);
 		assert.deepEqual(labels(await cmd.getArgumentCompletions("notify ")), ["notify warning", "notify limit"]);
 		assert.deepEqual(labels(await cmd.getArgumentCompletions("notify warning ")), ["notify warning on", "notify warning off"]);
@@ -605,5 +607,113 @@ test("/claude-relay without arguments: opens the settings menu in an interactive
 		assert.equal(opened, 1);
 		assert.deepEqual(notes.slice(3), [[USAGE, "warning"], [USAGE, "warning"]]);
 		assert.ok(items.length >= 3);
+	} finally { t.done(); }
+});
+
+// --- usage in the status bar ---
+const USAGE_STATE = (on: string) => `Claude relay usage in status bar: ${on}`;
+const LOGIN_LINE = "✓ Claude relay · subscription";
+function statusSetup(file: string, extra: Record<string, unknown> = {}) {
+	const f = fakePi();
+	registerRelay(f.pi, { piAi: piAi as any, env: {}, settingsFile: file, ...extra });
+	const { ctx: base, status } = loginCtx({ configured: true }, true);
+	const notes: [string, string | undefined][] = [];
+	const ctx = { ...base, ui: { ...base.ui, notify: (m: string, t?: string) => notes.push([m, t]) } };
+	const run = (args: string) => f.commands["claude-relay"].handler(args, ctx);
+	return { ...f, ctx, status, notes, run };
+}
+const allowed = () => ({ status: 200, headers: { "anthropic-ratelimit-unified-status": "allowed", "anthropic-ratelimit-unified-5h-utilization": "0.48", "anthropic-ratelimit-unified-7d-utilization": "0.73" } });
+const USAGE_LINE = "Claude 5h 48% · 7d 73%";
+
+test("/claude-relay status shows the state (default on) and writes nothing", async () => {
+	const t = tmpSettings();
+	try {
+		const { run, notes, status } = statusSetup(t.file);
+		await run("status");
+		assert.deepEqual(notes, [[USAGE_STATE("on"), "info"]]);
+		assert.deepEqual(status, []);
+		assert.equal(existsSync(t.file), false);
+	} finally { t.done(); }
+});
+
+test("status off restores the login line at once and keeps usage out of the footer; pop-ups still fire; on shows the last usage at once", async () => {
+	const t = tmpSettings();
+	try {
+		const { run, notes, status, handlers, ctx } = statusSetup(t.file);
+		handlers.after_provider_response(allowed(), ctx);
+		assert.deepEqual(status.at(-1), ["claude-relay", USAGE_LINE]);
+		await run("status off");
+		assert.deepEqual(notes.at(-1), [USAGE_STATE("off"), "info"]);
+		assert.deepEqual(status.at(-1), ["claude-relay", LOGIN_LINE]);
+		assert.deepEqual(JSON.parse(readFileSync(t.file, "utf8")), { status: { usage: false } });
+		const n = status.length;
+		handlers.after_provider_response(allowed(), ctx);
+		handlers.after_provider_response(rejected(), ctx);
+		assert.equal(status.length, n, "no usage footer while off");
+		assert.equal(notes.filter((x) => x[1] === "error").length, 1, "the limit pop-up still fires");
+		await run("status");
+		assert.deepEqual(notes.at(-1), [USAGE_STATE("off"), "info"]);
+		await run("status on");
+		assert.deepEqual(notes.at(-1), [USAGE_STATE("on"), "info"]);
+		assert.match(status.at(-1)[1], /^Claude limit reached/, "the last usage seen (while off) is shown at once");
+		handlers.after_provider_response(allowed(), ctx);
+		assert.deepEqual(status.at(-1), ["claude-relay", USAGE_LINE]);
+	} finally { t.done(); }
+});
+
+test("status on with no usage seen yet shows the login line; the setting survives a fresh registerRelay", async () => {
+	const t = tmpSettings();
+	try {
+		const a = statusSetup(t.file);
+		await a.run("status off");
+		await a.run("status on");
+		assert.deepEqual(a.status.at(-1), ["claude-relay", LOGIN_LINE]);
+		await a.run("status off");
+		const b = statusSetup(t.file);
+		await b.run("status");
+		assert.deepEqual(b.notes, [[USAGE_STATE("off"), "info"]]);
+		b.handlers.after_provider_response(allowed(), b.ctx);
+		assert.deepEqual(b.status, []);
+	} finally { t.done(); }
+});
+
+test("status with invalid arguments warns with the usage text and changes nothing; a failed save still applies and warns", async () => {
+	const t = tmpSettings();
+	try {
+		const { run, notes, status } = statusSetup(t.file);
+		for (const bad of ["status maybe", "status on extra", "status off now", "status usage on"]) {
+			notes.length = 0;
+			await run(bad);
+			assert.deepEqual(notes, [[USAGE, "warning"]], bad);
+		}
+		assert.equal(existsSync(t.file), false);
+		assert.deepEqual(status, []);
+		const f2 = tmpSettings();
+		try {
+			writeFileSync(join(f2.dir, "agent"), "x"); // the write must fail
+			const s = statusSetup(f2.file);
+			await s.run("status off");
+			assert.deepEqual(s.notes, [[USAGE_STATE("off"), "info"], ["Could not save the setting; it applies until Pi restarts.", "warning"]]);
+			assert.deepEqual(s.status.at(-1), ["claude-relay", LOGIN_LINE], "the footer still follows the in-memory value");
+		} finally { f2.done(); }
+	} finally { t.done(); }
+});
+
+test("the /claude-relay menu toggle updates the live footer without a restart", async () => {
+	const t = tmpSettings();
+	try {
+		let list: any;
+		class L { items: any[]; onChange: any; constructor(items: any[], _m: number, _t: unknown, onChange: any) { this.items = items; this.onChange = onChange; list = this; } render() { return []; } invalidate() {} }
+		const s = statusSetup(t.file, { loadTuiLib: async () => ({ SettingsList: L as any, getSettingsListTheme: () => ({}), truncateToWidth: (x: string) => x }) });
+		const ctx = { ...s.ctx, mode: "tui", hasUI: true, ui: { ...s.ctx.ui, custom: async (factory: any) => { factory({ requestRender() {} }, undefined, {}, () => {}); } } };
+		await s.commands["claude-relay"].handler("", ctx);
+		assert.equal(list.items.find((i: any) => i.id === "status.usage").currentValue, "on");
+		s.handlers.after_provider_response(allowed(), ctx);
+		assert.deepEqual(s.status.at(-1), ["claude-relay", USAGE_LINE]);
+		list.onChange("status.usage", "off");
+		assert.deepEqual(s.status.at(-1), ["claude-relay", LOGIN_LINE]);
+		assert.deepEqual(JSON.parse(readFileSync(t.file, "utf8")), { status: { usage: false } });
+		list.onChange("status.usage", "on");
+		assert.deepEqual(s.status.at(-1), ["claude-relay", USAGE_LINE]);
 	} finally { t.done(); }
 });

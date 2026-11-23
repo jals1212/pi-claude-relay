@@ -87,20 +87,24 @@ export function registerRelay(pi: Pick<ExtensionAPI, "registerProvider" | "on" |
 		onTurn: (report) => { writeDebugLog(report); timing.record(report); },
 	});
 	pi.registerProvider(PROVIDER, providerConfig(provider.streamSimple) as any);
-	pi.on("after_provider_response", createRateLimitHandler({ notifications: () => settings.notify() }) as any);
+	// The login line (session start) and the usage line share one status id: the handler restores the login line when the usage switch goes off.
+	let lastLogin: Segment[] | undefined;
+	const showLogin = (ctx: any) => { lastLogin = showLoginStatus(ctx, lastLogin); };
+	const rateLimit = createRateLimitHandler({ notifications: () => settings.notify(), usageStatus: () => settings.usageStatus(), login: showLogin });
+	pi.on("after_provider_response", rateLimit as any);
 	pi.registerCommand("claude-relay", {
-		description: "Claude relay settings menu (no arguments), prompt-cache stats and latency timing: /claude-relay [notify [warning|limit] [on|off] | stats | timing [on|off]]",
+		description: "Claude relay settings menu (no arguments), prompt-cache stats, latency timing and usage in the status bar: /claude-relay [notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off]]",
 		getArgumentCompletions: relayArgumentCompletions,
 		handler: async (args, ctx) => {
 			// No arguments in an interactive Pi: the settings menu; anywhere else (or if it cannot open) the text command.
-			if (!args.trim() && await openRelayMenu(ctx as any, { settings, stats: provider.stats, timing, loadLib: deps.loadTuiLib })) return;
-			runRelayCommand(args, settings, ctx?.ui as any, provider.stats, timing);
+			if (!args.trim() && await openRelayMenu(ctx as any, { settings, stats: provider.stats, timing, loadLib: deps.loadTuiLib, onUsageStatus: () => rateLimit.refresh(ctx as any) })) return;
+			runRelayCommand(args, settings, ctx?.ui as any, provider.stats, timing, () => rateLimit.refresh(ctx as any));
 		},
 	});
 	pi.on("session_start", (_event, ctx) => {
 		// Only Pi's own session ids keep a claude process alive; compaction and summaries use throwaway ids.
 		try { const id = ctx?.sessionManager?.getSessionId?.(); if (id) provider.keepSession(id); } catch { /* ignore */ }
-		showLoginStatus(ctx);
+		showLogin(ctx);
 	});
 	pi.on("session_shutdown", async (_event, ctx) => {
 		await provider.closeSession(ctx.sessionManager.getSessionId());
@@ -119,14 +123,22 @@ export function loginStatusText(configured: boolean, oauth: boolean): string {
 	return loginStatusSegments(configured, oauth).map((s) => s.text).join("");
 }
 
-/** Shows the relay and the space's login at session start, before the first response brings usage figures. Reads auth status only, never the credential. */
-function showLoginStatus(ctx: any) {
+/**
+ * Shows the relay and the space's login at session start, before the first response brings usage figures (and again when the usage footer is switched off).
+ * Reads auth status only, never the credential. Returns the line shown; when the status cannot be read it shows `previous` (the last line shown), if any.
+ */
+function showLoginStatus(ctx: any, previous?: Segment[]): Segment[] | undefined {
 	try {
-		const registry = ctx?.modelRegistry;
-		if (!registry || !ctx.ui?.setStatus) return;
-		const configured = !!registry.getProviderAuthStatus?.(PROVIDER)?.configured;
-		const model = ctx.model?.provider === PROVIDER ? ctx.model : (registry.getAll?.() ?? []).find((m: any) => m.provider === PROVIDER);
-		const oauth = configured && !!model && !!registry.isUsingOAuth?.(model);
-		ctx.ui.setStatus(STATUS_ID, paint(loginStatusSegments(configured, oauth), themeOf(ctx)));
-	} catch { /* the footer must never break a session */ }
+		if (!ctx?.ui?.setStatus) return previous;
+		let segments = previous;
+		const registry = ctx.modelRegistry;
+		if (registry) {
+			const configured = !!registry.getProviderAuthStatus?.(PROVIDER)?.configured;
+			const model = ctx.model?.provider === PROVIDER ? ctx.model : (registry.getAll?.() ?? []).find((m: any) => m.provider === PROVIDER);
+			const oauth = configured && !!model && !!registry.isUsingOAuth?.(model);
+			segments = loginStatusSegments(configured, oauth);
+		}
+		if (segments) ctx.ui.setStatus(STATUS_ID, paint(segments, themeOf(ctx)));
+		return segments;
+	} catch { /* the footer must never break a session */ return previous; }
 }

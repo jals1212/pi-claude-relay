@@ -131,3 +131,57 @@ test("without a usable UI the menu is not opened (text fallback): no ctx, print/
 		assert.equal(await openRelayMenu({ ...r.ctx, ui: { custom: async () => { throw new Error("tui"); } } }, r.deps), false);
 	} finally { r.done(); }
 });
+
+test("menu: 'Usage in status bar' is an on/off toggle, on by default, ahead of timing", () => {
+	const r = rig();
+	try {
+		let items = menuItems(r.deps, truncate);
+		const item = items.find((i) => i.id === MENU_IDS.usage)!;
+		assert.deepEqual([item.label, item.currentValue, item.values], ["Usage in status bar", "on", ["on", "off"]]);
+		assert.ok(items.findIndex((i) => i.id === MENU_IDS.usage) < items.findIndex((i) => i.id === MENU_IDS.timing));
+		r.settings.setUsageStatus(false);
+		items = menuItems(r.deps, truncate);
+		assert.equal(items.find((i) => i.id === MENU_IDS.usage)!.currentValue, "off");
+	} finally { r.done(); }
+});
+
+test("applyMenuChange toggles usage status and persists it; other keys are kept", () => {
+	const r = rig();
+	try {
+		assert.equal(applyMenuChange(MENU_IDS.usage, "off", r.settings), true);
+		assert.equal(r.settings.usageStatus(), false);
+		assert.deepEqual(JSON.parse(readFileSync(r.file, "utf8")), { status: { usage: false } });
+		assert.equal(applyMenuChange(MENU_IDS.timing, "on", r.settings), true);
+		assert.deepEqual(JSON.parse(readFileSync(r.file, "utf8")), { status: { usage: false }, timing: true });
+		assert.equal(applyMenuChange(MENU_IDS.usage, "on", r.settings), true);
+		assert.equal(createSettings(r.file).usageStatus(), true);
+		assert.equal(applyMenuChange(MENU_IDS.usage, "maybe", r.settings), undefined);
+		assert.equal(createSettings(r.file).usageStatus(), true);
+	} finally { r.done(); }
+});
+
+test("openRelayMenu: toggling usage status applies it at once (hook runs after the save, only for that item); a failed save still applies and warns", async () => {
+	const r = rig();
+	try {
+		const seen: boolean[] = [];
+		const deps = { ...r.deps, onUsageStatus: () => seen.push(r.settings.usageStatus()) };
+		await openRelayMenu(r.ctx, deps);
+		FakeList.last.onChange(MENU_IDS.timing, "on");
+		assert.deepEqual(seen, []);
+		FakeList.last.onChange(MENU_IDS.usage, "off");
+		assert.deepEqual(seen, [false]);
+		assert.equal(JSON.parse(readFileSync(r.file, "utf8")).status.usage, false);
+		FakeList.last.onChange(MENU_IDS.usage, "on");
+		assert.deepEqual(seen, [false, true]);
+		assert.deepEqual(r.notes, []);
+		// a hook that throws never breaks the menu
+		await openRelayMenu(r.ctx, { ...r.deps, onUsageStatus: () => { throw new Error("ui"); } });
+		assert.doesNotThrow(() => FakeList.last.onChange(MENU_IDS.usage, "off"));
+		// failed save: reported, the hook still runs (the value applies in memory)
+		const seen2: number[] = [];
+		await openRelayMenu(r.ctx, { ...r.deps, settings: { ...r.settings, setUsageStatus: () => false } as any, onUsageStatus: () => seen2.push(1) });
+		FakeList.last.onChange(MENU_IDS.usage, "off");
+		assert.deepEqual(r.notes, [["Could not save the setting; it applies until Pi restarts.", "warning"]]);
+		assert.deepEqual(seen2, [1]);
+	} finally { r.done(); }
+});

@@ -153,8 +153,57 @@ test("a later successful save of one switch does not undo an unsaved change of a
 }));
 
 test("completions offer timing and its on/off", () => {
-	assert.deepEqual(relayArgumentCompletions("")?.map((i) => i.value), ["notify", "stats", "timing"]);
+	assert.deepEqual(relayArgumentCompletions("")?.map((i) => i.value), ["notify", "stats", "timing", "status"]);
 	assert.deepEqual(relayArgumentCompletions("ti")?.map((i) => i.value), ["timing"]);
 	assert.deepEqual(relayArgumentCompletions("timing ")?.map((i) => i.value), ["timing on", "timing off"]);
 	assert.equal(relayArgumentCompletions("timing on "), null);
+});
+
+test("usage status is on by default; a missing, corrupt or non-boolean field means on", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	assert.equal(createSettings(file).usageStatus(), true);
+	writeFileSync(file, "garbage");
+	assert.equal(createSettings(file).usageStatus(), true);
+	for (const v of ["off", 0, null, "false", [], { usage: "no" }, {}]) { writeFileSync(file, JSON.stringify({ status: v })); assert.equal(createSettings(file).usageStatus(), true, JSON.stringify(v)); }
+	writeFileSync(file, JSON.stringify({ status: { usage: false } }));
+	assert.equal(createSettings(file).usageStatus(), false);
+}));
+
+test("setUsageStatus persists under status.usage, is read back, and keeps notify, timing, unknown keys and unknown status keys", () => inTmp((dir) => {
+	const file = join(dir, "nested", "s.json");
+	const s = createSettings(file);
+	assert.equal(s.setUsageStatus(false), true);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { status: { usage: false } });
+	assert.equal(statSync(file).mode & 0o777, 0o600);
+	assert.equal(createSettings(file).usageStatus(), false);
+	assert.equal(s.setNotify("limit", false), true);
+	assert.equal(s.setTiming(true), true);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { status: { usage: false }, notify: { warning: true, limit: false }, timing: true });
+	writeFileSync(file, JSON.stringify({ other: { keep: 1 }, status: { future: "x" }, notify: { warning: false, limit: true }, timing: true }));
+	assert.equal(s.setUsageStatus(true), true);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { other: { keep: 1 }, status: { future: "x", usage: true }, notify: { warning: false, limit: true }, timing: true });
+	assert.equal(s.usageStatus(), true);
+}));
+
+test("a failed usage-status write reports false, keeps the in-memory value, and does not disturb another unsaved switch", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	mkdirSync(file);
+	const s = createSettings(file);
+	assert.equal(s.setUsageStatus(false), false);
+	assert.equal(s.usageStatus(), false);
+	assert.deepEqual(readdirSync(dir), ["s.json"]);
+	const file2 = join(dir, "t.json");
+	const t = createSettings(file2);
+	chmodSync(dir, 0o500);
+	try { assert.equal(t.setUsageStatus(false), false); } finally { chmodSync(dir, 0o700); }
+	assert.equal(t.setTiming(true), true);
+	assert.equal(t.usageStatus(), false, "the unsaved change still applies until restart");
+	assert.equal(JSON.parse(readFileSync(file2, "utf8")).status, undefined, "only the saved switch reaches the file");
+}));
+
+test("completions offer status and its on/off", () => {
+	assert.deepEqual(relayArgumentCompletions("st")?.map((i) => i.value), ["stats", "status"]);
+	assert.deepEqual(relayArgumentCompletions("status")?.map((i) => i.value), ["status"]);
+	assert.deepEqual(relayArgumentCompletions("status ")?.map((i) => i.value), ["status on", "status off"]);
+	assert.equal(relayArgumentCompletions("status on "), null);
 });

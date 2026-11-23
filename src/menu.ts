@@ -33,13 +33,15 @@ export async function loadTuiLib(): Promise<TuiLib> {
 	return { SettingsList: tui.SettingsList as any, truncateToWidth: tui.truncateToWidth as any, getSettingsListTheme: pi.getSettingsListTheme as any };
 }
 
-export const MENU_IDS = { warning: "notify.warning", limit: "notify.limit", timing: "timing", stats: "stats", latency: "latency" } as const;
+export const MENU_IDS = { warning: "notify.warning", limit: "notify.limit", usage: "status.usage", timing: "timing", stats: "stats", latency: "latency" } as const;
 const onOff = (on: boolean) => (on ? "on" : "off");
 
 export interface MenuDeps {
 	settings: Settings;
 	stats?: Pick<Stats, "summary">;
 	timing?: Pick<Timing, "file" | "summary">;
+	/** Called after the usage-in-status-bar switch changed (saved or not), so the live footer follows at once. */
+	onUsageStatus?: () => void;
 	/** Defaults to `loadTuiLib`. */
 	loadLib?: () => Promise<TuiLib>;
 }
@@ -61,6 +63,7 @@ export function menuItems(d: MenuDeps, truncate: TuiLib["truncateToWidth"]): Men
 	const items: MenuItem[] = [
 		{ id: MENU_IDS.warning, label: "Usage warning pop-up", description: "Pop-up when you approach a Claude usage limit.", currentValue: onOff(notify.warning), values: ["on", "off"] },
 		{ id: MENU_IDS.limit, label: "Usage limit pop-up", description: "Pop-up when a Claude usage limit is reached.", currentValue: onOff(notify.limit), values: ["on", "off"] },
+		{ id: MENU_IDS.usage, label: "Usage in status bar", description: "Show Claude usage (5h / 7d) in the footer status. Off shows the login line instead; pop-ups are not affected.", currentValue: onOff(d.settings.usageStatus()), values: ["on", "off"] },
 		{ id: MENU_IDS.timing, label: "Latency timing", description: `Record per-request latency (no prompt text) to ${d.timing?.file ?? "<agent home>/claude-relay-timing.jsonl"}. Off by default.`, currentValue: onOff(d.settings.timing()), values: ["on", "off"] },
 	];
 	if (d.stats) { const stats = d.stats; items.push({ id: MENU_IDS.stats, label: "Prompt-cache stats", description: "Enter to view.", currentValue: "view", submenu: infoView(() => statsText(stats.summary()).split("\n"), truncate) }); }
@@ -76,6 +79,7 @@ export function applyMenuChange(id: string, value: string, settings: Settings): 
 	if (value !== "on" && value !== "off") return undefined;
 	const on = value === "on";
 	if (id === MENU_IDS.timing) return settings.setTiming(on);
+	if (id === MENU_IDS.usage) return settings.setUsageStatus(on);
 	const kind: NotifyKind | undefined = id === MENU_IDS.warning ? "warning" : id === MENU_IDS.limit ? "limit" : undefined;
 	return kind ? settings.setNotify(kind, on) : undefined;
 }
@@ -104,6 +108,7 @@ export async function openRelayMenu(ctx: MenuCtx | undefined, d: MenuDeps): Prom
 				(id, value) => {
 					let saved: boolean | undefined;
 					try { saved = applyMenuChange(id, value, d.settings); } catch { saved = false; }
+					if (id === MENU_IDS.usage && saved !== undefined) { try { d.onUsageStatus?.(); } catch { /* the footer must never break the menu */ } }
 					if (saved === false) { try { ui.notify?.("Could not save the setting; it applies until Pi restarts.", "warning"); } catch { /* ignore */ } }
 				},
 				() => done(undefined),
