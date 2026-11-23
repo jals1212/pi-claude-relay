@@ -677,6 +677,20 @@ test("status on with no usage seen yet shows the login line; the setting survive
 	} finally { t.done(); }
 });
 
+test("status off with no login line to restore clears the usage from the footer instead of leaving it", async () => {
+	for (const registry of [undefined, { getProviderAuthStatus: () => { throw new Error("boom"); } }]) {
+		const t = tmpSettings();
+		try {
+			const s = statusSetup(t.file);
+			const ctx = { ...s.ctx, modelRegistry: registry };
+			s.handlers.after_provider_response(allowed(), ctx);
+			assert.deepEqual(s.status.at(-1), ["claude-relay", USAGE_LINE]);
+			await s.commands["claude-relay"].handler("status off", ctx);
+			assert.deepEqual(s.status.at(-1), ["claude-relay", undefined], "no usage left in the footer");
+		} finally { t.done(); }
+	}
+});
+
 test("status with invalid arguments warns with the usage text and changes nothing; a failed save still applies and warns", async () => {
 	const t = tmpSettings();
 	try {

@@ -125,12 +125,13 @@ export function loginStatusText(configured: boolean, oauth: boolean): string {
 
 /**
  * Shows the relay and the space's login at session start, before the first response brings usage figures (and again when the usage footer is switched off).
- * Reads auth status only, never the credential. Returns the line shown; when the status cannot be read it shows `previous` (the last line shown), if any.
+ * Reads auth status only, never the credential. Returns the line shown; when the status cannot be read it shows `previous` (the last line shown), if any,
+ * and with neither it clears the status, so a usage line the user switched off never stays in the footer.
  */
 function showLoginStatus(ctx: any, previous?: Segment[]): Segment[] | undefined {
+	if (!ctx?.ui?.setStatus) return previous;
+	let segments = previous;
 	try {
-		if (!ctx?.ui?.setStatus) return previous;
-		let segments = previous;
 		const registry = ctx.modelRegistry;
 		if (registry) {
 			const configured = !!registry.getProviderAuthStatus?.(PROVIDER)?.configured;
@@ -138,7 +139,7 @@ function showLoginStatus(ctx: any, previous?: Segment[]): Segment[] | undefined 
 			const oauth = configured && !!model && !!registry.isUsingOAuth?.(model);
 			segments = loginStatusSegments(configured, oauth);
 		}
-		if (segments) ctx.ui.setStatus(STATUS_ID, paint(segments, themeOf(ctx)));
-		return segments;
-	} catch { /* the footer must never break a session */ return previous; }
+	} catch { /* unreadable auth status: fall back to the last line shown */ segments = previous; }
+	try { ctx.ui.setStatus(STATUS_ID, segments ? paint(segments, themeOf(ctx)) : undefined); } catch { /* the footer must never break a session */ }
+	return segments;
 }
