@@ -22,6 +22,8 @@ class FakeList {
 	render(width: number) { return this.items.map((i) => `${i.label}: ${i.currentValue}`.slice(0, width)); }
 	invalidate() {}
 	handleInput(d: string) { this.inputs.push(d); }
+	mice: unknown[] = [];
+	handleMouse(e: unknown) { this.mice.push(e); return { handled: true }; }
 }
 const lib: TuiLib = { SettingsList: FakeList as any, getSettingsListTheme: () => "THEME", truncateToWidth: truncate };
 
@@ -101,6 +103,11 @@ test("openRelayMenu: shows a SettingsList; a change persists, Esc closes, input 
 		c.handleInput("x");
 		assert.deepEqual(list.inputs, ["x"]);
 		assert.equal(r.rendered(), 1);
+		// the mouse reaches the list too (wheel scroll, click to select), and the list's answer goes back to the TUI
+		const click = { type: "press", x: 2, y: 3 };
+		assert.deepEqual(c.handleMouse?.(click), { handled: true });
+		assert.deepEqual(list.mice, [click]);
+		assert.equal(r.rendered(), 1, "the TUI redraws from the list's result; the menu requests no extra render per mouse event");
 		list.onCancel();
 		assert.equal(r.closed(), 1);
 		assert.deepEqual(r.notes, []);

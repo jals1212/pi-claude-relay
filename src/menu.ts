@@ -21,6 +21,7 @@ export interface TuiLib {
 		render(width: number): readonly string[];
 		invalidate(): void;
 		handleInput?(data: string): void;
+		handleMouse?(event: unknown): unknown;
 	};
 	getSettingsListTheme(): unknown;
 	truncateToWidth(text: string, width: number, ellipsis?: string): string;
@@ -113,6 +114,9 @@ export async function openRelayMenu(ctx: MenuCtx | undefined, d: MenuDeps): Prom
 				render: (width: number) => [theme?.fg ? theme.fg("accent", theme.bold ? theme.bold(title) : title) : title, "", ...list.render(width)],
 				invalidate: () => list.invalidate(),
 				handleInput: (data: string) => { list.handleInput?.(data); tui?.requestRender?.(); },
+				// Wheel scroll and click-to-select reach the list as in Pi's own /settings. The TUI redraws from the returned result
+				// (move/hover default to no redraw), so no render is requested here: pointer moves stay free.
+				handleMouse: (event: unknown) => list.handleMouse?.(event),
 			};
 		});
 		return true;

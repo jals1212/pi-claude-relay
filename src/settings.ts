@@ -67,8 +67,11 @@ export function createSettings(file: string): Settings {
 	const loaded = readRaw(file);
 	const notify = toNotify(loaded);
 	let timing = toTiming(loaded);
-	/** Re-reads the file (another Pi process may have changed another switch) and writes `change(raw)` over it, keeping every other key. */
-	function persist(change: (raw: Record<string, unknown>) => Record<string, unknown>): boolean {
+	/**
+	 * Re-reads the file (another Pi process may have changed another switch) and writes `change(raw)` over it, keeping every other key.
+	 * `sync` takes the saved values back only for the setting being changed: another setting whose own save failed keeps its in-memory value.
+	 */
+	function persist(change: (raw: Record<string, unknown>) => Record<string, unknown>, sync: (merged: Record<string, unknown>) => void): boolean {
 		try {
 			mkdirSync(dirname(file), { recursive: true });
 			let isLink = false;
@@ -76,8 +79,7 @@ export function createSettings(file: string): Settings {
 			if (isLink) return false; // never write through (or replace) a symlinked settings file
 			const merged = change(readRaw(file));
 			writeAtomic(file, JSON.stringify(merged, null, 2) + "\n");
-			Object.assign(notify, toNotify(merged));
-			timing = toTiming(merged);
+			sync(merged);
 			return true;
 		} catch {
 			return false;
@@ -88,12 +90,15 @@ export function createSettings(file: string): Settings {
 		setNotify(kind, on) {
 			notify[kind] = on;
 			// Another Pi process may have changed the other switch since we loaded: change only ours.
-			return persist((raw) => ({ ...raw, notify: { ...(isObj(raw.notify) ? raw.notify : {}), ...toNotify(raw), [kind]: on } }));
+			return persist(
+				(raw) => ({ ...raw, notify: { ...(isObj(raw.notify) ? raw.notify : {}), ...toNotify(raw), [kind]: on } }),
+				(merged) => { Object.assign(notify, toNotify(merged)); },
+			);
 		},
 		timing: () => timing,
 		setTiming(on) {
 			timing = on;
-			return persist((raw) => ({ ...raw, timing: on }));
+			return persist((raw) => ({ ...raw, timing: on }), (merged) => { timing = toTiming(merged); });
 		},
 	};
 }

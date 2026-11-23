@@ -133,6 +133,25 @@ test("a failed timing write reports false and applies in memory until restart", 
 	assert.deepEqual(readdirSync(dir), ["s.json"]);
 }));
 
+test("a later successful save of one switch does not undo an unsaved change of another", () => inTmp((dir) => {
+	const file = join(dir, "s.json");
+	const s = createSettings(file);
+	chmodSync(dir, 0o500); // the timing save cannot write
+	try { assert.equal(s.setTiming(true), false); } finally { chmodSync(dir, 0o700); }
+	assert.equal(s.setNotify("warning", false), true);
+	assert.equal(s.timing(), true, "the unsaved timing change still applies until restart");
+	assert.deepEqual(s.notify(), { warning: false, limit: true });
+	const saved = JSON.parse(readFileSync(file, "utf8"));
+	assert.equal(saved.timing, undefined, "only the switch that was saved reaches the file");
+	assert.deepEqual(saved.notify, { warning: false, limit: true });
+
+	chmodSync(dir, 0o500); // and the other way round
+	try { assert.equal(s.setNotify("limit", false), false); } finally { chmodSync(dir, 0o700); }
+	assert.equal(s.setTiming(false), true);
+	assert.deepEqual(s.notify(), { warning: false, limit: false });
+	assert.equal(s.timing(), false);
+}));
+
 test("completions offer timing and its on/off", () => {
 	assert.deepEqual(relayArgumentCompletions("")?.map((i) => i.value), ["notify", "stats", "timing"]);
 	assert.deepEqual(relayArgumentCompletions("ti")?.map((i) => i.value), ["timing"]);
