@@ -69,9 +69,10 @@ export function menuItems(d: MenuDeps, truncate: TuiLib["truncateToWidth"]): Men
 		{ id: MENU_IDS.label, label: "Status bar label", description: "Prefix of the usage line: claude \"Claude 5h …\", relay \"⎍ 5h …\", loop \"🔁 5h …\", asterisk \"✳️ 5h …\", star \"✴️ 5h …\", or keycap \"*️⃣ 5h …\".", currentValue: d.settings.statusLabel(), values: [...STATUS_LABELS] },
 		{ id: MENU_IDS.timing, label: "Latency timing", description: `Record per-request latency (no prompt text) to ${d.timing?.file ?? "<agent home>/claude-relay-timing.jsonl"}. Off by default.`, currentValue: onOff(d.settings.timing()), values: ["on", "off"] },
 	];
-	if (d.stats) {
-		const stats = d.stats, timing = d.timing, settings = d.settings;
-		items.push({ id: MENU_IDS.stats, label: "Stats", description: "Prompt cache and, while latency timing is on, latency and output rate. Enter to view.", currentValue: "view", submenu: infoView(() => statsText(stats.summary(), { on: settings.timing(), summary: timing?.summary() }).split("\n"), truncate) });
+	// One view for both sources, shown whenever either is wired; statsText leaves out the part whose source is missing.
+	if (d.stats || d.timing) {
+		const { stats, timing, settings } = d;
+		items.push({ id: MENU_IDS.stats, label: "Stats", description: "Prompt cache and, while latency timing is on, latency and output rate. Enter to view.", currentValue: "view", submenu: infoView(() => statsText(stats?.summary(), timing && { on: settings.timing(), summary: timing.summary() }).split("\n"), truncate) });
 	}
 	return items;
 }

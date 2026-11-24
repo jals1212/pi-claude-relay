@@ -308,3 +308,22 @@ test("completions offer label and its claude/relay/loop/asterisk/star/keycap", (
 	assert.deepEqual(relayArgumentCompletions("label ")?.map((i) => i.value), ["label claude", "label relay", "label loop", "label asterisk", "label star", "label keycap"]);
 	assert.equal(relayArgumentCompletions("label relay "), null);
 });
+
+test("/claude-relay stats shows only what is wired: no latency block without a timing source, the latency block alone without cache stats", async () => {
+	const { createStats } = await import("../src/stats.ts");
+	const { createTiming } = await import("../src/timing.ts");
+	const dir = mkdtempSync(join(tmpdir(), "relay-stats-cmd-"));
+	try {
+		const settings = createSettings(join(dir, "s.json"));
+		settings.setTiming(true);
+		const notes: [string, string | undefined][] = [];
+		const ui = { notify: (m: string, t?: string) => { notes.push([m, t]); } };
+		runRelayCommand("stats", settings, ui, createStats(), undefined);
+		assert.deepEqual(notes.at(-1), ["Claude relay stats: 0 turns · cache hit 0%\nprocess starts: 0 · restarts: 0\ncache warm requests answered locally: 0 · one-off requests: 0", "info"]);
+		const timing = createTiming({ file: join(dir, "t.jsonl"), enabled: () => true, append: async () => {} });
+		runRelayCommand("stats", settings, ui, undefined, timing);
+		assert.deepEqual(notes.at(-1), ["latency timing: on, no timed requests yet", "info"]);
+		runRelayCommand("stats", settings, ui, undefined, undefined);
+		assert.deepEqual(notes.at(-1), [COMMAND_USAGE, "warning"]);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -93,9 +93,9 @@ test("statsText with latency: off names the switch; on without samples says so; 
 	const st = createStats();
 	st.record("A", { plan: "spawn", usage: usage(10, 5, 0, 90), stopReason: "stop" });
 	const cache = "Claude relay stats: 1 turns · cache hit 0%\nprocess starts: 1 · restarts: 0\ncache warm requests answered locally: 0 · one-off requests: 0";
-	assert.equal(statsText(st.summary(), { on: false }), `${cache}\nlatency timing: off (/claude-relay timing on records it)`);
+	assert.equal(statsText(st.summary(), { on: false, summary: { requests: 0 } }), `${cache}\nlatency timing: off (/claude-relay timing on records it)`);
 	assert.equal(statsText(st.summary(), { on: true, summary: { requests: 0 } }), `${cache}\nlatency timing: on, no timed requests yet`);
-	const summary = { requests: 2, firstEvent: { n: 2, median: 40, p90: 50 }, total: { n: 2, median: 900, p90: 1000 }, outputRate: { n: 2, median: 80, p10: 60 } };
+	const summary = { requests: 2, firstEvent: { n: 2, median: 40, p90: 50 }, total: { n: 2, median: 900, p90: 1000 }, generationRate: { n: 2, median: 80, p10: 60 } };
 	assert.equal(statsText(st.summary(), { on: true, summary }), [
 		cache,
 		"latency, last 2 requests · median / p90",

@@ -1,6 +1,6 @@
 // Opt-in latency timing (`/claude-relay timing on`). The session takes a few marks per request in memory (see `TurnTiming`);
 // this module turns a settled turn into one JSON line (async append, never awaited) and keeps a small in-process sample for the summary
-// that `/claude-relay stats` shows.
+// that `/claude-relay stats` shows (`latencyLines`).
 // Content-free: times, token counts, stop reason, model and the restart category only.
 import { createHash } from "node:crypto";
 import { appendFile } from "node:fs/promises";
@@ -17,27 +17,42 @@ export interface TimingSummary {
 	firstEvent?: TimingStat;
 	/** First thinking delta. */
 	firstThinking?: TimingStat;
-	/** First text delta or tool call, whichever came first: the first visible output. */
-	firstOutput?: TimingStat;
+	/** First text delta or tool call, whichever came first: the first visible output (thinking is not visible). */
+	firstVisible?: TimingStat;
 	/** Request start to settle. */
 	total?: TimingStat;
 	/**
-	 * Output tokens per second from the first generated token (thinking, text or tool call) to the stop (the settle when
-	 * there is no stop mark): the model's generation speed without the spawn, the time to the first token or Pi's tool runs.
-	 * Median and nearest-rank 10th percentile (the slow tail).
+	 * Output tokens per second from the first generated token (thinking, text or tool call; unlike `firstVisible`, thinking
+	 * counts, because its tokens are output tokens) to the stop (the settle when there is no stop mark): the model's
+	 * generation speed without the spawn, the time to the first token or Pi's tool runs. Median and nearest-rank 10th
+	 * percentile (the slow tail).
 	 */
-	outputRate?: RateStat;
+	generationRate?: RateStat;
 }
 
 export interface RateStat { n: number; median: number; p10: number }
 
-/** Median (mean of the two middle values for an even count) and nearest-rank 90th percentile. `undefined` for an empty list. */
+const ascending = (values: number[]) => [...values].sort((a, b) => a - b);
+/** Median of an ascending, non-empty list: the mean of the two middle values for an even count. */
+function median(v: number[]): number {
+	const mid = v.length >> 1;
+	return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+}
+/** Nearest-rank percentile `p` (0..1) of an ascending, non-empty list. */
+const nearestRank = (v: number[], p: number) => v[Math.ceil(p * v.length) - 1];
+
+/** Median and nearest-rank 90th percentile. `undefined` for an empty list. */
 export function timingStat(values: number[]): TimingStat | undefined {
 	if (!values.length) return undefined;
-	const v = [...values].sort((a, b) => a - b);
-	const mid = v.length >> 1;
-	const median = v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
-	return { n: v.length, median, p90: v[Math.ceil(0.9 * v.length) - 1] };
+	const v = ascending(values);
+	return { n: v.length, median: median(v), p90: nearestRank(v, 0.9) };
+}
+
+/** Median and nearest-rank 10th percentile (the slow tail of a rate). `undefined` for an empty list. */
+function rateStat(values: number[]): RateStat | undefined {
+	if (!values.length) return undefined;
+	const v = ascending(values);
+	return { n: v.length, median: median(v), p10: nearestRank(v, 0.1) };
 }
 
 export interface TimingDeps {
@@ -61,21 +76,23 @@ const round = (ms: number | undefined) => (typeof ms === "number" ? Math.round(m
 const sha8 = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 8);
 const defaultAppend = (file: string, line: string) => appendFile(file, line, { mode: 0o600 });
 
-interface Sample { firstEvent?: number; firstThinking?: number; firstOutput?: number; total: number; outputRate?: number }
+interface Sample { firstEvent?: number; firstThinking?: number; firstVisible?: number; total: number; generationRate?: number }
 
-/** Tokens per second over [first generated token, stop or settle]; `undefined` without output, a generated token or a positive window. */
-function outputRate(t: TurnTiming, output: number | undefined): number | undefined {
-	const starts = [t.firstThinking, t.firstText, t.firstTool].filter((x): x is number => typeof x === "number");
-	if (!output || output <= 0 || !starts.length) return undefined;
-	const window = (t.stop ?? t.settle) - Math.min(...starts);
-	return window > 0 ? output / (window / 1000) : undefined;
-}
+const earliest = (...marks: (number | undefined)[]) => {
+	const set = marks.filter((x): x is number => typeof x === "number");
+	return set.length ? Math.min(...set) : undefined;
+};
+/** First text or tool call: the first output the user sees. */
+const firstVisible = (t: TurnTiming) => earliest(t.firstText, t.firstTool);
+/** First thinking, text or tool call: the first token the model generated. */
+const firstGenerated = (t: TurnTiming) => earliest(t.firstThinking, t.firstText, t.firstTool);
 
-function rateStat(values: number[]): RateStat | undefined {
-	const st = timingStat(values);
-	if (!st) return undefined;
-	const v = [...values].sort((a, b) => a - b);
-	return { n: st.n, median: st.median, p10: v[Math.ceil(0.1 * v.length) - 1] };
+/** Output tokens per second over [first generated token, stop or settle]; `undefined` without output tokens, a generated token or a positive window. */
+function generationRate(t: TurnTiming, outputTokens: number | undefined): number | undefined {
+	const start = firstGenerated(t);
+	if (!outputTokens || outputTokens <= 0 || start === undefined) return undefined;
+	const window = (t.stop ?? t.settle) - start;
+	return window > 0 ? outputTokens / (window / 1000) : undefined;
 }
 
 export function createTiming(deps: TimingDeps): Timing {
@@ -91,8 +108,7 @@ export function createTiming(deps: TimingDeps): Timing {
 				const { info } = report;
 				// Compaction and summaries, and turns that ended in an error or abort, would skew the figures of a normal turn.
 				if (!report.throwaway && (info.stopReason === "stop" || info.stopReason === "length" || info.stopReason === "toolUse")) {
-					const outputs = [t.firstText, t.firstTool].filter((x): x is number => typeof x === "number");
-					samples.push({ firstEvent: t.firstLine, firstThinking: t.firstThinking, firstOutput: outputs.length ? Math.min(...outputs) : undefined, total: t.settle, outputRate: outputRate(t, info.usage?.output) });
+					samples.push({ firstEvent: t.firstLine, firstThinking: t.firstThinking, firstVisible: firstVisible(t), total: t.settle, generationRate: generationRate(t, info.usage?.output) });
 					if (samples.length > max) samples.splice(0, samples.length - max);
 				}
 				const line = {
@@ -106,22 +122,29 @@ export function createTiming(deps: TimingDeps): Timing {
 			} catch { /* timing must never break a turn */ }
 		},
 		summary() {
-			const pick = (f: (s: Sample) => number | undefined) => timingStat(samples.map(f).filter((x): x is number => typeof x === "number"));
-			return { requests: samples.length, firstEvent: pick((s) => s.firstEvent), firstThinking: pick((s) => s.firstThinking), firstOutput: pick((s) => s.firstOutput), total: pick((s) => s.total), outputRate: rateStat(samples.map((s) => s.outputRate).filter((x): x is number => typeof x === "number")) };
+			const values = (f: (s: Sample) => number | undefined) => samples.map(f).filter((x): x is number => typeof x === "number");
+			return {
+				requests: samples.length, firstEvent: timingStat(values((s) => s.firstEvent)), firstThinking: timingStat(values((s) => s.firstThinking)),
+				firstVisible: timingStat(values((s) => s.firstVisible)), total: timingStat(values((s) => s.total)), generationRate: rateStat(values((s) => s.generationRate)),
+			};
 		},
 	};
 }
 
 const ms = (n: number) => String(Math.round(n));
 
-/** The summary lines (empty when no request was sampled): milliseconds, median / p90. */
-export function timingSummaryLines(s: TimingSummary): string[] {
-	if (!s.requests) return [];
+/**
+ * The latency block of `/claude-relay stats`: one line naming the switch while timing is off or nothing was timed yet,
+ * else the summary (milliseconds as median / p90, then the generation rate).
+ */
+export function latencyLines(on: boolean, s: TimingSummary): string[] {
+	if (!on) return ["latency timing: off (/claude-relay timing on records it)"];
+	if (!s.requests) return ["latency timing: on, no timed requests yet"];
 	const row = (label: string, st?: TimingStat) => st && `${label}: ${ms(st.median)} / ${ms(st.p90)} ms (n=${st.n})`;
 	return [
-		`last ${s.requests} request${s.requests === 1 ? "" : "s"} · median / p90`,
-		row("first event", s.firstEvent), row("first thinking", s.firstThinking), row("first text or tool call", s.firstOutput), row("total", s.total),
-		s.outputRate && `output rate: ${ms(s.outputRate.median)} tok/s median, ${ms(s.outputRate.p10)} slowest 10% (n=${s.outputRate.n})`,
+		`latency, last ${s.requests} request${s.requests === 1 ? "" : "s"} · median / p90`,
+		row("first event", s.firstEvent), row("first thinking", s.firstThinking), row("first text or tool call", s.firstVisible), row("total", s.total),
+		s.generationRate && `output rate: ${ms(s.generationRate.median)} tok/s median, ${ms(s.generationRate.p10)} slowest 10% (n=${s.generationRate.n})`,
 	].filter((l): l is string => !!l);
 }
 

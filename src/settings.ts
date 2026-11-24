@@ -205,7 +205,7 @@ export function runRelayCommand(args: string, settings: Settings, ui: NotifyUi |
 	// `onUsageStatus` repaints the footer; it runs after any footer setting (`status`, `reset`, `label`) changed.
 	const say = (message: string, type: "info" | "warning") => { try { ui?.notify?.(message, type); } catch { /* UI problems never break a command */ } };
 	const [cmd, kind, value, ...rest] = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
-	if (cmd === "stats" && stats && kind === undefined) return say(statsText(stats.summary(), { on: settings.timing(), summary: timing?.summary() }), "info");
+	if (cmd === "stats" && (stats || timing) && kind === undefined) return say(statsText(stats?.summary(), timing && { on: settings.timing(), summary: timing.summary() }), "info");
 	if (cmd === "timing") {
 		if (kind === undefined) return say(timingStateText(settings.timing(), timing?.file), "info");
 		if ((kind !== "on" && kind !== "off") || value !== undefined) return say(COMMAND_USAGE, "warning");

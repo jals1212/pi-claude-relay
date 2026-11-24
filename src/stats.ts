@@ -1,7 +1,8 @@
 // Prompt-cache bookkeeping for one provider: how many turns, how many claude processes were started or lost, and how much
-// of the input came from Anthropic's cache. Pure: no I/O, no Pi imports.
+// of the input came from Anthropic's cache; and the text of `/claude-relay stats`, which appends the latency block that
+// timing.ts formats. Pure: no I/O and no Pi imports here (timing.ts, imported for that block, appends its log file).
 import type { TurnInfo } from "./session.ts";
-import { timingSummaryLines, type TimingSummary } from "./timing.ts";
+import { latencyLines, type TimingSummary } from "./timing.ts";
 
 export type LastTurn = TurnInfo & { sessionKey: string };
 
@@ -64,11 +65,18 @@ export function createStats(): Stats {
 	};
 }
 
-/** Latency timing as `/claude-relay stats` shows it: the switch and, while it is on, the summary of the timed requests. */
-export interface LatencyView { on: boolean; summary?: TimingSummary }
+/** Latency timing as `/claude-relay stats` shows it: the switch and the summary of the timed requests, read from one timing source. */
+export interface LatencyView { on: boolean; summary: TimingSummary }
 
-/** The text of `/claude-relay stats`: the prompt-cache figures, then the latency block when `latency` is given. */
-export function statsText(s: StatsSummary, latency?: LatencyView): string {
+/**
+ * The text of `/claude-relay stats`: the prompt-cache figures when `s` is given, then the latency block when `latency` is
+ * given. Each part appears only when its source is wired, so the text never claims a state nothing records.
+ */
+export function statsText(s: StatsSummary | undefined, latency?: LatencyView): string {
+	return [...(s ? cacheLines(s) : []), ...(latency ? latencyLines(latency.on, latency.summary) : [])].join("\n");
+}
+
+function cacheLines(s: StatsSummary): string[] {
 	const reasons = Object.entries(s.restarts.byReason)
 		.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 		.map(([reason, n]) => `${reason} ${n}`);
@@ -77,12 +85,5 @@ export function statsText(s: StatsSummary, latency?: LatencyView): string {
 		`Claude relay stats: ${s.turns} turns · cache hit ${Math.round(s.hitRate * 100)}%`,
 		`process starts: ${s.spawns} · restarts: ${restarts}${s.resumes > 0 ? ` · resumed: ${s.resumes}` : ""}`,
 		`cache warm requests answered locally: ${s.warmRequests} · one-off requests: ${s.throwawayTurns}`,
-		...(latency ? latencyLines(latency) : []),
-	].join("\n");
-}
-
-function latencyLines(l: LatencyView): string[] {
-	if (!l.on) return ["latency timing: off (/claude-relay timing on records it)"];
-	const lines = l.summary ? timingSummaryLines(l.summary) : [];
-	return lines.length ? [`latency, ${lines[0]}`, ...lines.slice(1)] : ["latency timing: on, no timed requests yet"];
+	];
 }

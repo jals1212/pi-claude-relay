@@ -93,6 +93,19 @@ test("the stats entry opens one view of the cache stats and the timing summary; 
 	} finally { r.done(); }
 });
 
+test("the stats view shows only what is wired: cache stats without a timing source have no latency line, timing without cache stats still gets the view", () => {
+	const r = rig();
+	try {
+		r.settings.setTiming(true);
+		const view = (deps: any) => menuItems(deps, truncate).find((i) => i.id === MENU_IDS.stats)?.submenu!("view", () => {}).render(80).map((l) => l.trim());
+		const cacheOnly = view({ ...r.deps, timing: undefined })!;
+		assert.ok(cacheOnly[0].startsWith("Claude relay stats: 0 turns"));
+		assert.equal(cacheOnly.some((l) => l.startsWith("latency")), false);
+		assert.deepEqual(view({ ...r.deps, stats: undefined }), ["latency timing: on, no timed requests yet", "", "(any key to go back)"]);
+		assert.equal(view({ ...r.deps, stats: undefined, timing: undefined }), undefined);
+	} finally { r.done(); }
+});
+
 test("openRelayMenu: shows a SettingsList; a change persists, Esc closes, input re-renders; a failed save warns", async () => {
 	const r = rig();
 	try {

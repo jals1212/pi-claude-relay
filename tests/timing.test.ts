@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTiming, timingStat, timingStateText, timingSummaryLines, TIMING_SAMPLE_CAP } from "../src/timing.ts";
+import { createTiming, timingStat, timingStateText, latencyLines, TIMING_SAMPLE_CAP } from "../src/timing.ts";
 import type { TurnReport } from "../src/provider.ts";
 
 const report = (over: Partial<TurnReport["info"]> = {}, extra: Partial<TurnReport> = {}): TurnReport => ({
@@ -88,8 +88,8 @@ test("summary: median and p90 per metric; first output is the earlier of text an
 	assert.equal(s.requests, 5);
 	assert.deepEqual(s.firstEvent, { n: 5, median: 30, p90: 50 });
 	assert.deepEqual(s.firstThinking, { n: 3, median: 35, p90: 55 });
-	// firstOutput: n=10→20, 20→40, 30→min(60,30)=30, 40→80, 50→100
-	assert.deepEqual(s.firstOutput, { n: 5, median: 40, p90: 100 });
+	// firstVisible: n=10→20, 20→40, 30→min(60,30)=30, 40→80, 50→100
+	assert.deepEqual(s.firstVisible, { n: 5, median: 40, p90: 100 });
 	assert.deepEqual(s.total, { n: 5, median: 300, p90: 500 });
 });
 
@@ -107,7 +107,7 @@ test("output rate: output tokens per second from the first generated token (thin
 	t.record(report({ timing: { model: "m", firstText: 40, stop: 40, settle: 41 } }));
 	const s = t.summary();
 	assert.equal(s.requests, 6);
-	assert.deepEqual(s.outputRate, { n: 3, median: 100, p10: 50 });
+	assert.deepEqual(s.generationRate, { n: 3, median: 100, p10: 50 });
 });
 
 test("the in-memory sample is capped at the most recent requests", () => {
@@ -124,11 +124,11 @@ test("timingStateText: the switch state and the log path only; the summary lives
 	assert.equal(timingStateText(true, "/p/t.jsonl"), "Claude relay timing: on (/p/t.jsonl)");
 });
 
-test("timingSummaryLines: the summary block, with the output rate line only when a request produced a rate", () => {
+test("latencyLines: the summary block, with the output rate line only when a request produced a rate; one line when off or nothing was timed", () => {
 	const t = createTiming({ file: "/p/t.jsonl", enabled: () => true, append: async () => {} });
 	t.record(report());
-	assert.deepEqual(timingSummaryLines(t.summary()), [
-		"last 1 request · median / p90",
+	assert.deepEqual(latencyLines(true, t.summary()), [
+		"latency, last 1 request · median / p90",
 		"first event: 50 / 50 ms (n=1)",
 		"first text or tool call: 80 / 80 ms (n=1)",
 		"total: 125 / 125 ms (n=1)",
@@ -136,6 +136,7 @@ test("timingSummaryLines: the summary block, with the output rate line only when
 	]);
 	const none = createTiming({ file: "/p/t.jsonl", enabled: () => true, append: async () => {} });
 	none.record(report({ timing: { model: "m", settle: 10 } }));
-	assert.deepEqual(timingSummaryLines(none.summary()), ["last 1 request · median / p90", "total: 10 / 10 ms (n=1)"]);
-	assert.deepEqual(timingSummaryLines({ requests: 0 }), []);
+	assert.deepEqual(latencyLines(true, none.summary()), ["latency, last 1 request · median / p90", "total: 10 / 10 ms (n=1)"]);
+	assert.deepEqual(latencyLines(true, { requests: 0 }), ["latency timing: on, no timed requests yet"]);
+	assert.deepEqual(latencyLines(false, t.summary()), ["latency timing: off (/claude-relay timing on records it)"]);
 });
