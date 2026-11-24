@@ -32,14 +32,14 @@ export interface RegisterDeps {
 	newSession?: (key: string, onTurn: (info: TurnInfo) => void) => RelaySession;
 }
 
-/** `PI_CLAUDE_RELAY_DEBUG_LOG=<file>`: one JSON line per settled turn, hashes and counts only (never prompt text, tool arguments, credentials or the MCP URL). */
+/** `PI_CLAUDE_RELAY_DEBUG_LOG=<file>`: one JSON line per settled turn, hashes and counts only (never prompt text, tool arguments, credentials or the MCP URL); a failed turn adds its error message and the shapes of claude's last events. */
 function debugLogWriter(env: NodeJS.ProcessEnv) {
 	return (r: TurnReport) => {
 		const file = env.PI_CLAUDE_RELAY_DEBUG_LOG;
 		if (!file) return;
 		try {
-			const { plan, reason, changed, stopReason, usage } = r.info;
-			const line = { t: Date.now(), session: createHash("sha256").update(r.sessionKey).digest("hex").slice(0, 8), plan, reason, changed, stopReason, usage, systemPromptHash: r.systemPromptHash, toolsHash: r.toolsHash, messages: r.messages };
+			const { plan, reason, changed, stopReason, usage, skippedCalls, error } = r.info;
+			const line = { t: Date.now(), session: createHash("sha256").update(r.sessionKey).digest("hex").slice(0, 8), plan, reason, changed, stopReason, usage, skippedCalls, error, systemPromptHash: r.systemPromptHash, toolsHash: r.toolsHash, messages: r.messages };
 			appendFileSync(file, JSON.stringify(line) + "\n", { mode: 0o600 });
 		} catch { /* a debug log must never break a turn */ }
 	};

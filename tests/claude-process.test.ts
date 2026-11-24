@@ -4,6 +4,7 @@ import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnClaude, removeSessionTranscripts, sweepStaleTranscripts } from "../src/claude-process.ts";
+import { claudeSystemPrompt } from "../src/session.ts";
 
 // Fake claude: reports its argv plus the content and mode of the files it was given, then waits for stdin to close.
 const scratch: string[] = [];
@@ -49,7 +50,7 @@ test("spawnClaude keeps the system prompt and MCP URL out of argv, in private fi
 	const argv = r.argv.join(" ");
 	assert.ok(!argv.includes("SECRET-SYSTEM-PROMPT"), "system prompt must not be visible in argv");
 	assert.ok(!argv.includes("secret-token"), "MCP URL token must not be visible in argv");
-	assert.equal(r.sp.content, opts.systemPrompt);
+	assert.equal(r.sp.content, claudeSystemPrompt(opts.systemPrompt, opts.toolNames));
 	assert.deepEqual(JSON.parse(r.mcp.content), { mcpServers: { pi: { type: "http", url: opts.mcpUrl, timeout: 86400000 } } });
 	assert.equal(r.sp.mode, 0o600);
 	assert.equal(r.mcp.mode, 0o600);

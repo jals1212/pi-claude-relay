@@ -423,3 +423,27 @@ test("two offered tools that share a rewritten name are still reachable by their
 		assert.equal((events.at(-1) as any).partial.content[0].name, name);
 	}
 });
+
+test("trail: the last event shapes of the turn (types, block types, stop reasons; never content) and the skipped call count", () => {
+	const { mapper } = harness();
+	mapper.handle(start());
+	mapper.handle({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } });
+	mapper.handle({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "SECRET THOUGHT" } });
+	mapper.handle({ type: "content_block_stop", index: 0 });
+	mapper.handle({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t1", name: "bash", input: {} } });
+	mapper.handle({ type: "message_delta", delta: { stop_reason: "tool_use" } });
+	mapper.handle({ type: "message_stop" });
+	mapper.handle({ type: "message_start", message: { id: "msg_2" } });
+	mapper.handle({ type: "message_stop" });
+	assert.deepEqual(mapper.trail, ["message_start", "content_block_start:thinking", "content_block_delta:thinking_delta", "content_block_stop", "content_block_start:tool_use", "message_delta:tool_use", "message_stop", "message_start", "message_stop"]);
+	assert.equal(mapper.skippedCalls, 1);
+	assert.equal(JSON.stringify(mapper.trail).includes("SECRET"), false);
+});
+
+test("trail keeps only the last 16 events", () => {
+	const { mapper } = harness();
+	mapper.handle(start());
+	for (let i = 0; i < 30; i++) mapper.handle({ type: "ping" });
+	assert.equal(mapper.trail.length, 16);
+	assert.deepEqual(new Set(mapper.trail), new Set(["ping"]));
+});

@@ -56,6 +56,10 @@ export interface TurnMapper {
 	readonly finished: boolean;
 	/** Feed one raw SSE event. Returns "done" once the turn has a terminal event. */
 	handle(event: any): "continue" | "done";
+	/** The last `TRAIL_SIZE` events of the turn as shapes only (`content_block_start:thinking`, `message_delta:end_turn`), for diagnosis. */
+	readonly trail: readonly string[];
+	/** Tool calls claude answered itself in this turn (see `MAX_SKIPPED_CALLS`). */
+	readonly skippedCalls: number;
 	/** Terminate the turn with an error (no-op once finished). */
 	fail(errorMessage: string, reason?: "error" | "aborted"): void;
 }
@@ -77,6 +81,16 @@ const STOP_REASONS: Record<string, StopReason> = { end_turn: "stop", stop_sequen
 /** Tool calls claude answers itself (unknown names) that one turn may drop; the next one fails the turn, so a model stuck on a made-up name cannot loop. */
 export const MAX_SKIPPED_CALLS = 3;
 
+/** Events kept in `TurnMapper.trail`. */
+const TRAIL_SIZE = 16;
+
+/** One event's shape: its type plus the block type, delta type or stop reason. Never text, arguments or ids. */
+function eventShape(ev: any): string {
+	const type = printableName(ev?.type);
+	const detail = ev?.type === "content_block_start" ? ev.content_block?.type : ev?.type === "content_block_delta" ? ev.delta?.type : ev?.type === "message_delta" ? ev.delta?.stop_reason : undefined;
+	return typeof detail === "string" && detail ? `${type}:${printableName(detail)}` : type;
+}
+
 export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 	const now = init.now ?? Date.now;
 	const message: RelayMessage = {
@@ -91,6 +105,7 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 	let skipped = 0;
 	/** Tool calls skipped in the whole turn, bounded by `MAX_SKIPPED_CALLS`. */
 	let skippedInTurn = 0;
+	const trail: string[] = [];
 	/** Token counts of earlier Anthropic messages of this turn (a message that only held skipped calls is followed by another one). */
 	const carried = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 };
 
@@ -148,6 +163,10 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 
 	/** Never throws: an event shape that breaks the mapper fails the turn instead. */
 	function handle(ev: any): "continue" | "done" {
+		if (!finished) {
+			trail.push(eventShape(ev));
+			if (trail.length > TRAIL_SIZE) trail.shift();
+		}
 		try {
 			return handleEvent(ev);
 		} catch (e) {
@@ -261,6 +280,8 @@ export function createTurnMapper(init: TurnMapperInit): TurnMapper {
 		get message() { return message; },
 		get started() { return started; },
 		get finished() { return finished; },
+		get trail() { return trail; },
+		get skippedCalls() { return skippedInTurn; },
 		handle, fail,
 	};
 }

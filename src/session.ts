@@ -75,6 +75,10 @@ export interface TurnInfo {
 	/** Usage of the turn's final assistant message. */
 	usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	stopReason?: string;
+	/** Tool calls claude answered itself (names it does not know) in this turn; present only when there were any. */
+	skippedCalls?: number;
+	/** A failed turn: its error message and the last event shapes from claude (`TurnMapper.trail`, never content). */
+	error?: { message: string; trail: string[] };
 	/** Present only while latency timing is on (`SessionDeps.timing`). */
 	timing?: TurnTiming;
 }
@@ -135,6 +139,17 @@ export const TOOL_CALL_TIMEOUT_MS = 86_400_000;
  */
 export function mcpConfig(mcpUrl: string): object {
 	return { mcpServers: { pi: { type: "http", url: mcpUrl, timeout: TOOL_CALL_TIMEOUT_MS } } };
+}
+
+/**
+ * The system prompt claude gets: Pi's prompt plus one fixed note naming the form claude gives Pi's tools. Pi's prompt lists them by
+ * their bare names (`bash`), but claude only knows `mcp__pi__bash`; a model that copies the bare name gets `No such tool available`
+ * from claude itself, and repeating it fails the turn (`MAX_SKIPPED_CALLS`). The note is deterministic, so the prompt cache survives.
+ */
+export function claudeSystemPrompt(systemPrompt: string, toolNames: readonly string[]): string {
+	if (!toolNames.length) return systemPrompt;
+	const first = toolNames[0];
+	return `${systemPrompt}\n\nTool names: every tool above is served by the MCP server \`pi\`. Call it by its MCP name: \`${TOOL_PREFIX}\` followed by the tool name, with each character other than letters, digits, \`_\` and \`-\` replaced by \`_\` (for example \`${TOOL_PREFIX}${claudeToolName(first)}\`). A bare name such as \`${first}\` is not a tool you can call.`;
 }
 
 export function buildClaudeArgs(o: ClaudeArgsOptions): string[] {
@@ -636,7 +651,7 @@ export function createSession(deps: SessionDeps): RelaySession {
 		}
 		if (deps.onTurn) {
 			const { input, output, cacheRead, cacheWrite } = m.usage;
-			try { deps.onTurn({ ...info, usage: { input, output, cacheRead, cacheWrite }, stopReason: m.stopReason, ...(mark && settleAt !== undefined ? { timing: { model: req.model, ...mark.marks, settle: settleAt } } : {}) }); } catch { /* an observer must not break the turn */ }
+			try { deps.onTurn({ ...info, usage: { input, output, cacheRead, cacheWrite }, stopReason: m.stopReason, ...(mapper.skippedCalls ? { skippedCalls: mapper.skippedCalls } : {}), ...(m.stopReason === "error" ? { error: { message: m.errorMessage ?? "", trail: [...mapper.trail] } } : {}), ...(mark && settleAt !== undefined ? { timing: { model: req.model, ...mark.marks, settle: settleAt } } : {}) }); } catch { /* an observer must not break the turn */ }
 		}
 	}
 

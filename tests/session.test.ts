@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSession, STEER_LEAD_MS, type TurnInfo, buildClaudeArgs, buildChildEnv, mcpConfig, claudeCredential, toClaudeUserContent, type ClaudeProc, type SpawnOptions } from "../src/session.ts";
+import { createSession, STEER_LEAD_MS, type TurnInfo, buildClaudeArgs, claudeSystemPrompt, buildChildEnv, mcpConfig, claudeCredential, toClaudeUserContent, type ClaudeProc, type SpawnOptions } from "../src/session.ts";
 import type { RelayEvent } from "../src/turn.ts";
 import type { PiMessage } from "../src/sync.ts";
 
@@ -1674,4 +1674,33 @@ test("timing: a throwing timing switch or clock never breaks the turn", async ()
 	const events = await turn(a.session, [u("hola")], () => a.procs[0].text("m1", "a"));
 	assert.equal(events.at(-1)?.type, "done");
 	assert.equal("timing" in infos[0], false);
+});
+
+test("claudeSystemPrompt appends one fixed note naming the MCP form of Pi's tools; without tools the prompt is unchanged", () => {
+	const out = claudeSystemPrompt("SYS", ["read", "web.fetch"]);
+	assert.ok(out.startsWith("SYS\n\n"));
+	assert.match(out, /mcp__pi__read/);
+	assert.match(out, /A bare name such as `read` is not a tool you can call/);
+	assert.equal(claudeSystemPrompt("SYS", ["read", "web.fetch"]), out, "deterministic, so the prompt cache survives");
+	assert.equal(claudeSystemPrompt("SYS", []), "SYS");
+});
+
+test("onTurn: a failed turn reports its error message and event trail; skipped calls are counted; a clean turn reports neither", async () => {
+	const infos: TurnInfo[] = [];
+	const { session, procs } = setup({ onTurn: (i) => infos.push(structuredClone(i)) });
+	await turn(session, [u("hola")], () => {
+		const ev = (event: any) => procs[0].emit({ type: "stream_event", event });
+		ev({ type: "message_start", message: { id: "m1", usage: USAGE_A } });
+		ev({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "t1", name: "bash", input: {} } });
+		ev({ type: "message_delta", delta: { stop_reason: "tool_use" } });
+		ev({ type: "message_stop" });
+		ev({ type: "message_start", message: { id: "m2" } });
+		ev({ type: "message_stop" });
+	});
+	assert.equal(infos[0].stopReason, "error");
+	assert.deepEqual(infos[0].error, { message: "Claude message ended without a stop reason", trail: ["message_start", "content_block_start:tool_use", "message_delta:tool_use", "message_stop", "message_start", "message_stop"] });
+	assert.equal(infos[0].skippedCalls, 1);
+	await turn(session, [u("otra")], () => cachedText(procs[1], "m3", USAGE_B));
+	assert.equal("error" in infos[1], false);
+	assert.equal("skippedCalls" in infos[1], false);
 });

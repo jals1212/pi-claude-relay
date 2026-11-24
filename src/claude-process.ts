@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, chmodSync, mkdtempSync, writeFileSync, rmSync, lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mcpConfig, buildClaudeArgs, buildChildEnv, SESSION_ID_PATTERN, type ClaudeProc, type SpawnOptions } from "./session.ts";
+import { mcpConfig, buildClaudeArgs, claudeSystemPrompt, buildChildEnv, SESSION_ID_PATTERN, type ClaudeProc, type SpawnOptions } from "./session.ts";
 import { createLineReader } from "./sync.ts";
 
 const STDERR_KEEP = 8192;
@@ -15,7 +15,7 @@ function writeLaunchFiles(opts: SpawnOptions) {
 	const systemPromptFile = join(dir, "system-prompt.txt");
 	const mcpConfigFile = join(dir, "mcp.json");
 	try {
-		writeFileSync(systemPromptFile, opts.systemPrompt, { mode: 0o600 });
+		writeFileSync(systemPromptFile, claudeSystemPrompt(opts.systemPrompt, opts.toolNames), { mode: 0o600 });
 		writeFileSync(mcpConfigFile, JSON.stringify(mcpConfig(opts.mcpUrl)), { mode: 0o600 });
 	} catch (e) { cleanup(); throw e; }
 	return { systemPromptFile, mcpConfigFile, cleanup };
