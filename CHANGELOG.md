@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## 0.4.2
+
+### Fixed
+
+- A turn no longer fails with `Claude called a tool Pi did not offer: bash` because the model copied a tool's bare name from Pi's system prompt. The prompt `claude` reads now ends with one fixed note telling the model that Pi's tools are called `mcp__pi__<name>`.
+
+### Added
+
+- `PI_CLAUDE_RELAY_DEBUG_LOG` lines show `skippedCalls` when `claude` answered tool calls with names it does not know, and, for a failed turn, `error` with its message and a `trail` of the shapes of `claude`'s last 16 events (types and stop reasons only, never content).
+
 ## 0.4.1
 
 ### Fixed
