@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- The latency summary shows the model's generation speed: `output rate: 74 tok/s median, 52 slowest 10% (n=12)`. It is output tokens per second from the first generated token (thinking, text or tool call) to the end of the message, so it leaves out starting `claude`, the time to the first token and Pi's tool runs, which a rate over the whole request includes. Requests without output tokens or a generated token are left out.
+
+### Changed
+
+- `/claude-relay stats` now shows the latency summary below the prompt-cache figures while latency timing is on, and one line naming the switch while it is off. `/claude-relay timing` (no arguments, `on` or `off`) shows only the switch and the log file; it no longer prints the summary.
+- The `/claude-relay` menu has one read-only **Stats** view in place of **Prompt-cache stats** and **Latency summary**.
+
 ## 0.3.1
 
 ### Added

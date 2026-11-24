@@ -55,7 +55,9 @@ test("menu items: both pop-ups and timing as on/off toggles with the current val
 		assert.deepEqual([byId[MENU_IDS.limit].label, byId[MENU_IDS.limit].currentValue], ["Usage limit pop-up", "off"]);
 		assert.deepEqual([byId[MENU_IDS.timing].label, byId[MENU_IDS.timing].currentValue], ["Latency timing", "off"]);
 		assert.ok(byId[MENU_IDS.timing].description!.includes(r.timing.file));
-		assert.ok(byId[MENU_IDS.stats].submenu && byId[MENU_IDS.latency].submenu);
+		assert.ok(byId[MENU_IDS.stats].submenu);
+		assert.equal(byId[MENU_IDS.stats].label, "Stats");
+		assert.equal(items.some((i) => i.label === "Latency summary"), false, "one stats view, no separate latency view");
 	} finally { r.done(); }
 });
 
@@ -73,7 +75,7 @@ test("toggling an item goes through Settings and persists; an unknown id or valu
 	} finally { r.done(); }
 });
 
-test("the read-only entries open a view of the cache stats and the timing summary; any key goes back; lines fit the width", () => {
+test("the stats entry opens one view of the cache stats and the timing summary; any key goes back; lines fit the width", () => {
 	const r = rig();
 	try {
 		const items = menuItems(r.deps, truncate);
@@ -84,8 +86,10 @@ test("the read-only entries open a view of the cache stats and the timing summar
 		assert.ok(lines.every((l) => l.length <= 30));
 		stats.handleInput("x");
 		assert.equal(backs, 1);
-		const latency = items.find((i) => i.id === MENU_IDS.latency)!.submenu!("view", () => {});
-		assert.ok(latency.render(80).some((l) => l.includes("No timed requests yet.")));
+		assert.ok(stats.render(80).some((l) => l.includes("latency timing: off (/claude-relay timing on records it)")));
+		r.settings.setTiming(true);
+		const on = menuItems(r.deps, truncate).find((i) => i.id === MENU_IDS.stats)!.submenu!("view", () => {});
+		assert.ok(on.render(80).some((l) => l.includes("latency timing: on, no timed requests yet")));
 	} finally { r.done(); }
 });
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTiming, timingStat, timingStateText, TIMING_SAMPLE_CAP } from "../src/timing.ts";
+import { createTiming, timingStat, timingStateText, timingSummaryLines, TIMING_SAMPLE_CAP } from "../src/timing.ts";
 import type { TurnReport } from "../src/provider.ts";
 
 const report = (over: Partial<TurnReport["info"]> = {}, extra: Partial<TurnReport> = {}): TurnReport => ({
@@ -93,6 +93,23 @@ test("summary: median and p90 per metric; first output is the earlier of text an
 	assert.deepEqual(s.total, { n: 5, median: 300, p90: 500 });
 });
 
+test("output rate: output tokens per second from the first generated token (thinking, text or tool call) to the stop; median and slowest 10%", () => {
+	const t = createTiming({ file: "/x", enabled: () => true, append: async () => {} });
+	// thinking starts first: 100 tokens over 2000 - 1000 ms = 100 tok/s
+	t.record(report({ usage: { input: 1, output: 100, cacheRead: 0, cacheWrite: 0 }, timing: { model: "m", firstThinking: 1000, firstText: 1500, stop: 2000, settle: 2100 } }));
+	// a tool call before any text: 50 tokens over 1000 ms = 50 tok/s
+	t.record(report({ usage: { input: 1, output: 50, cacheRead: 0, cacheWrite: 0 }, timing: { model: "m", firstTool: 500, stop: 1500, settle: 1600 } }));
+	// no stop mark: the settle closes the window; 200 tokens over 1000 ms = 200 tok/s
+	t.record(report({ usage: { input: 1, output: 200, cacheRead: 0, cacheWrite: 0 }, timing: { model: "m", firstText: 1000, settle: 2000 } }));
+	// left out of the rate: no output, no generated token, a zero window
+	t.record(report({ usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }, timing: { model: "m", firstText: 10, stop: 20, settle: 30 } }));
+	t.record(report({ timing: { model: "m", firstLine: 5, settle: 30 } }));
+	t.record(report({ timing: { model: "m", firstText: 40, stop: 40, settle: 41 } }));
+	const s = t.summary();
+	assert.equal(s.requests, 6);
+	assert.deepEqual(s.outputRate, { n: 3, median: 100, p10: 50 });
+});
+
 test("the in-memory sample is capped at the most recent requests", () => {
 	assert.equal(TIMING_SAMPLE_CAP, 500);
 	const t = createTiming({ file: "/x", enabled: () => true, max: 3, append: async () => {} });
@@ -102,16 +119,23 @@ test("the in-memory sample is capped at the most recent requests", () => {
 	assert.deepEqual(s.total, { n: 3, median: 4, p90: 5 });
 });
 
-test("timingStateText: off / on with the path, and the summary lines when there are samples", () => {
+test("timingStateText: the switch state and the log path only; the summary lives in /claude-relay stats", () => {
 	assert.equal(timingStateText(false, "/p/t.jsonl"), "Claude relay timing: off");
 	assert.equal(timingStateText(true, "/p/t.jsonl"), "Claude relay timing: on (/p/t.jsonl)");
+});
+
+test("timingSummaryLines: the summary block, with the output rate line only when a request produced a rate", () => {
 	const t = createTiming({ file: "/p/t.jsonl", enabled: () => true, append: async () => {} });
 	t.record(report());
-	assert.equal(timingStateText(true, t.file, t.summary()), [
-		"Claude relay timing: on (/p/t.jsonl)",
+	assert.deepEqual(timingSummaryLines(t.summary()), [
 		"last 1 request · median / p90",
 		"first event: 50 / 50 ms (n=1)",
 		"first text or tool call: 80 / 80 ms (n=1)",
 		"total: 125 / 125 ms (n=1)",
-	].join("\n"));
+		"output rate: 1050 tok/s median, 1050 slowest 10% (n=1)",
+	]);
+	const none = createTiming({ file: "/p/t.jsonl", enabled: () => true, append: async () => {} });
+	none.record(report({ timing: { model: "m", settle: 10 } }));
+	assert.deepEqual(timingSummaryLines(none.summary()), ["last 1 request · median / p90", "total: 10 / 10 ms (n=1)"]);
+	assert.deepEqual(timingSummaryLines({ requests: 0 }), []);
 });

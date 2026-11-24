@@ -403,7 +403,7 @@ test("/claude-relay stats: exact text without restarts, as an info notification"
 	r.ask("main", { maxTokens: 1 }); // cache warm request, answered locally
 	await flush(); await flush();
 	await r.stats();
-	assert.deepEqual(r.notes, [["Claude relay stats: 2 turns · cache hit 40%\nprocess starts: 1 · restarts: 0\ncache warm requests answered locally: 1 · one-off requests: 0", "info"]]);
+	assert.deepEqual(r.notes, [["Claude relay stats: 2 turns · cache hit 40%\nprocess starts: 1 · restarts: 0\ncache warm requests answered locally: 1 · one-off requests: 0\nlatency timing: off (/claude-relay timing on records it)", "info"]]);
 });
 
 test("/claude-relay stats: restarts by reason, and throwaway-session turns counted as one-off requests", async () => {
@@ -420,14 +420,14 @@ test("/claude-relay stats: restarts by reason, and throwaway-session turns count
 	r.ask("summary-123");
 	await flush(); await flush(); await flush();
 	await r.stats();
-	assert.equal(r.notes[0][0], "Claude relay stats: 4 turns · cache hit 67%\nprocess starts: 1 · restarts: 3 (abort 2, model 1)\ncache warm requests answered locally: 0 · one-off requests: 1");
+	assert.equal(r.notes[0][0], "Claude relay stats: 4 turns · cache hit 67%\nprocess starts: 1 · restarts: 3 (abort 2, model 1)\ncache warm requests answered locally: 0 · one-off requests: 1\nlatency timing: off (/claude-relay timing on records it)");
 	assert.equal(r.notes[0][1], "info");
 });
 
 test("/claude-relay stats with nothing recorded, with extra arguments, and with notify untouched", async () => {
 	const r = statsRig();
 	await r.stats();
-	assert.equal(r.notes[0][0], "Claude relay stats: 0 turns · cache hit 0%\nprocess starts: 0 · restarts: 0\ncache warm requests answered locally: 0 · one-off requests: 0");
+	assert.equal(r.notes[0][0], "Claude relay stats: 0 turns · cache hit 0%\nprocess starts: 0 · restarts: 0\ncache warm requests answered locally: 0 · one-off requests: 0\nlatency timing: off (/claude-relay timing on records it)");
 	await r.commands["claude-relay"].handler("stats now", r.ctx);
 	assert.deepEqual(r.notes[1], [USAGE, "warning"]);
 	await r.commands["claude-relay"].handler("notify", r.ctx);
@@ -552,7 +552,7 @@ test("/claude-relay timing with an invalid argument shows the usage and leaves t
 	} finally { r.t.done(); }
 });
 
-test("timing on: a settled turn appends one content-free JSON line asynchronously and the status shows a summary; off writes nothing", async () => {
+test("timing on: a settled turn appends one content-free JSON line asynchronously and /claude-relay stats shows its summary; off writes nothing", async () => {
 	const r = timingRig();
 	try {
 		await r.handlers.session_start({ type: "session_start" }, { sessionManager: { getSessionId: () => "main" } });
@@ -571,7 +571,9 @@ test("timing on: a settled turn appends one content-free JSON line asynchronousl
 		for (const secret of ["TOP SECRET", "SECRET SYSTEM", "sk-ant", "read"]) assert.equal(text.includes(secret), false, secret);
 		assert.equal(statSync(r.timingFile).mode & 0o777, 0o600);
 		await r.run("timing");
-		assert.match(r.notes.at(-1)![0], new RegExp(`^Claude relay timing: on \\(.*claude-relay-timing\\.jsonl\\)\\nlast 1 request · median / p90\\nfirst event: 40 / 40 ms \\(n=1\\)\\nfirst text or tool call: 70 / 70 ms \\(n=1\\)\\ntotal: 91 / 91 ms \\(n=1\\)$`));
+		assert.deepEqual(r.notes.at(-1), [`Claude relay timing: on (${r.timingFile})`, "info"], "timing shows only the switch");
+		await r.run("stats");
+		assert.match(r.notes.at(-1)![0], new RegExp(`^Claude relay stats: 2 turns · cache hit \\d+%\\n.*\\n.*\\nlatency, last 1 request · median / p90\\nfirst event: 40 / 40 ms \\(n=1\\)\\nfirst text or tool call: 70 / 70 ms \\(n=1\\)\\ntotal: 91 / 91 ms \\(n=1\\)\\noutput rate: 450 tok/s median, 450 slowest 10% \\(n=1\\)$`));
 		await r.run("timing off");
 		r.infos.push(r.info());
 		r.ask(); await flush(); await flush(); await new Promise((res) => setTimeout(res, 30));

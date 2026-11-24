@@ -1,6 +1,7 @@
 // Prompt-cache bookkeeping for one provider: how many turns, how many claude processes were started or lost, and how much
 // of the input came from Anthropic's cache. Pure: no I/O, no Pi imports.
 import type { TurnInfo } from "./session.ts";
+import { timingSummaryLines, type TimingSummary } from "./timing.ts";
 
 export type LastTurn = TurnInfo & { sessionKey: string };
 
@@ -63,8 +64,11 @@ export function createStats(): Stats {
 	};
 }
 
-/** The text of `/claude-relay stats`. */
-export function statsText(s: StatsSummary): string {
+/** Latency timing as `/claude-relay stats` shows it: the switch and, while it is on, the summary of the timed requests. */
+export interface LatencyView { on: boolean; summary?: TimingSummary }
+
+/** The text of `/claude-relay stats`: the prompt-cache figures, then the latency block when `latency` is given. */
+export function statsText(s: StatsSummary, latency?: LatencyView): string {
 	const reasons = Object.entries(s.restarts.byReason)
 		.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 		.map(([reason, n]) => `${reason} ${n}`);
@@ -73,5 +77,12 @@ export function statsText(s: StatsSummary): string {
 		`Claude relay stats: ${s.turns} turns · cache hit ${Math.round(s.hitRate * 100)}%`,
 		`process starts: ${s.spawns} · restarts: ${restarts}${s.resumes > 0 ? ` · resumed: ${s.resumes}` : ""}`,
 		`cache warm requests answered locally: ${s.warmRequests} · one-off requests: ${s.throwawayTurns}`,
+		...(latency ? latencyLines(latency) : []),
 	].join("\n");
+}
+
+function latencyLines(l: LatencyView): string[] {
+	if (!l.on) return ["latency timing: off (/claude-relay timing on records it)"];
+	const lines = l.summary ? timingSummaryLines(l.summary) : [];
+	return lines.length ? [`latency, ${lines[0]}`, ...lines.slice(1)] : ["latency timing: on, no timed requests yet"];
 }

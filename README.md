@@ -52,7 +52,7 @@ Thinking levels map to `claude --effort`, and Claude's thinking reaches Pi as su
 | --- | --- |
 | `PI_CLAUDE_RELAY=off` (or `0`, `false`) | Disable the relay; Pi streams Anthropic directly again. |
 | `PI_CLAUDE_RELAY_CLAUDE_BIN` | Path to the `claude` binary (default: `claude` on `PATH`). |
-| `PI_CLAUDE_RELAY_DEBUG_LOG` | File to append one JSON line per settled turn to (see [Prompt-cache stats](#prompt-cache-stats)). |
+| `PI_CLAUDE_RELAY_DEBUG_LOG` | File to append one JSON line per settled turn to (see [Stats](#stats)). |
 
 All are optional. Which login is used is never configured: it is the Anthropic login of the Pi space.
 
@@ -63,7 +63,7 @@ All are optional. Which login is used is never configured: it is the Anthropic l
 - **Usage warning pop-up** and **Usage limit pop-up** (see [Notifications](#notifications)),
 - **Usage in status bar**, **Reset time in status bar**, **Reset time format** and **Status bar label** (see [Usage in the status bar](#usage-in-the-status-bar)),
 - **Latency timing** (see [Latency timing](#latency-timing); its description shows the log file),
-- read-only views of the **Prompt-cache stats** and of the **Latency summary**.
+- a read-only **Stats** view, the same text as `/claude-relay stats` (see [Stats](#stats)).
 
 Without an interactive terminal UI (print, JSON or RPC mode) `/claude-relay` with no arguments prints the usage line instead. The text subcommands (`notify`, `stats`, `timing`, `status`, `reset`, `label`) work everywhere and never open the menu. The menu loads `@earendil-works/pi-tui` from Pi at the moment it opens; if that fails the text behavior is used.
 
@@ -143,20 +143,30 @@ Two settings shape each window's reset time: **Reset time in status bar** choose
 
 It applies to every state of the usage line (`⎍ limit reached · resets in …` too), at once, and is saved as `{ "status": { "label": "relay" } }`; a missing or unknown value means `claude`. The login line and the pop-ups keep saying Claude.
 
-### Prompt-cache stats
+### Stats
 
-`/claude-relay stats` shows how well the relay keeps Anthropic's prompt cache warm in this Pi process (counters start at zero when Pi starts):
+`/claude-relay stats` shows how well the relay keeps Anthropic's prompt cache warm in this Pi process (counters start at zero when Pi starts) and, while [latency timing](#latency-timing) is on, where the time of a request goes:
 
 ```
 Claude relay stats: 12 turns · cache hit 91%
 process starts: 1 · restarts: 2 (abort 1, model 1) · resumed: 2
 cache warm requests answered locally: 3 · one-off requests: 1
+latency, last 12 requests · median / p90
+first event: 750 / 2200 ms (n=12)
+first thinking: 950 / 2400 ms (n=9)
+first text or tool call: 1200 / 2600 ms (n=12)
+total: 12130 / 41030 ms (n=12)
+output rate: 74 tok/s median, 52 slowest 10% (n=12)
 ```
+
+With timing off the last block is one line, `latency timing: off (/claude-relay timing on records it)`; with timing on and no timed request yet, `latency timing: on, no timed requests yet`.
 
 - **cache hit** = cache-read tokens ÷ (input + cache-read + cache-write tokens), over the turns of your Pi sessions.
 - **process starts** are first `claude` processes of a Pi session; **restarts** replaced a process that held a warm cache, with the reason: `model`, `system-prompt`, `tools`, `effort`, `credential`, `history` (compaction, branch switch, edited history), `missing-tool-call`, `other`, or a process lost outside the planner: `abort`, `error`, `exit`.
 - **resumed** (shown only when above zero) counts the restarts that continued `claude`'s own session with `--resume` instead of replaying a flattened transcript (see [How it works](#how-it-works)); it is a subset of the restarts.
 - **cache warm requests** are Pi's idle cache-warming requests, answered locally without reaching `claude`; **one-off requests** are turns of throwaway sessions (compaction and summaries), which are kept out of the other figures.
+- **latency** summarizes the last 500 timed requests of this Pi process (normal turns that finished without an error): count, median and p90 of the first line, first thinking, first text or tool call, and the total.
+- **output rate** is output tokens per second from the first generated token (thinking, text or tool call) to the end of the message, as the median and the slowest 10%. Unlike a rate over the whole request, it leaves out starting `claude`, the time to the first token and Pi's tool runs; requests without output tokens or a generated token are left out.
 
 Set `PI_CLAUDE_RELAY_DEBUG_LOG=/path/to/file` to also append one JSON line per settled turn (`t`, `session` = first 8 hex of the sha256 of the Pi session id, `plan`, `reason`, `changed`, `stopReason`, `usage`, `systemPromptHash`, `toolsHash`, `messages`). `reason` is the first cause of a restart, as in `stats`; for a config change `changed` lists every field that changed (`["system-prompt", "tools"]`). Pi lists the active tools in the system prompt, so a tool set that changes mid-session (a tool registering after the first turn, for example) usually shows as `system-prompt` with `tools` in `changed`. The file is created with mode `0600` and never contains prompt text, tool arguments, credentials or the MCP URL; write errors are ignored.
 
@@ -165,7 +175,7 @@ Set `PI_CLAUDE_RELAY_DEBUG_LOG=/path/to/file` to also append one JSON line per s
 Pi's session log records only the total duration of a request. To see where the time goes (starting `claude`, time to the first token), switch on timing; it is **off by default**:
 
 ```
-/claude-relay timing          # state, log file and a summary of this process's requests
+/claude-relay timing          # state and log file
 /claude-relay timing on       # start recording
 /claude-relay timing off      # stop
 ```
@@ -182,7 +192,7 @@ The switch is saved per Pi space in `<agent home>/claude-relay-settings.json` (`
 
 plus `t` (wall-clock ms), `session` (first 8 hex of the sha256 of the Pi session id), `model`, `stopReason` and `output` (output tokens); `throwaway` marks one-off requests (compaction, summaries). The file never contains prompt text, tool names or arguments, credentials, URLs or paths.
 
-`/claude-relay timing` also summarizes the last 500 requests of this Pi process (normal turns that finished without an error): count, median and p90 of the first line, first thinking, first text or tool call, and the total.
+`/claude-relay stats` shows the summary of the timed requests (see [Stats](#stats)).
 
 There is no measurable cost: when it is off, a request pays one boolean check and nothing per streamed event. When it is on, the marks live in memory and the line is written after the request settled, with an asynchronous append that the turn never waits for; write errors are ignored.
 

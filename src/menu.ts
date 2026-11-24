@@ -3,7 +3,7 @@
 // toggle handling are unit-testable without a terminal, and a Pi without a usable TUI falls back to the text command.
 import { RESET_FORMATS, RESET_WHENS, STATUS_LABELS, type NotifyKind, type ResetFormat, type ResetWhen, type Settings, type StatusLabel } from "./settings.ts";
 import { statsText, type Stats } from "./stats.ts";
-import { timingSummaryLines, type Timing } from "./timing.ts";
+import type { Timing } from "./timing.ts";
 
 export interface MenuItem {
 	id: string;
@@ -33,7 +33,7 @@ export async function loadTuiLib(): Promise<TuiLib> {
 	return { SettingsList: tui.SettingsList as any, truncateToWidth: tui.truncateToWidth as any, getSettingsListTheme: pi.getSettingsListTheme as any };
 }
 
-export const MENU_IDS = { warning: "notify.warning", limit: "notify.limit", usage: "status.usage", resetWhen: "status.resetWhen", resetFormat: "status.resetFormat", label: "status.label", timing: "timing", stats: "stats", latency: "latency" } as const;
+export const MENU_IDS = { warning: "notify.warning", limit: "notify.limit", usage: "status.usage", resetWhen: "status.resetWhen", resetFormat: "status.resetFormat", label: "status.label", timing: "timing", stats: "stats" } as const;
 const onOff = (on: boolean) => (on ? "on" : "off");
 
 export interface MenuDeps {
@@ -69,10 +69,9 @@ export function menuItems(d: MenuDeps, truncate: TuiLib["truncateToWidth"]): Men
 		{ id: MENU_IDS.label, label: "Status bar label", description: "Prefix of the usage line: claude \"Claude 5h …\", relay \"⎍ 5h …\", loop \"🔁 5h …\", asterisk \"✳️ 5h …\", star \"✴️ 5h …\", or keycap \"*️⃣ 5h …\".", currentValue: d.settings.statusLabel(), values: [...STATUS_LABELS] },
 		{ id: MENU_IDS.timing, label: "Latency timing", description: `Record per-request latency (no prompt text) to ${d.timing?.file ?? "<agent home>/claude-relay-timing.jsonl"}. Off by default.`, currentValue: onOff(d.settings.timing()), values: ["on", "off"] },
 	];
-	if (d.stats) { const stats = d.stats; items.push({ id: MENU_IDS.stats, label: "Prompt-cache stats", description: "Enter to view.", currentValue: "view", submenu: infoView(() => statsText(stats.summary()).split("\n"), truncate) }); }
-	if (d.timing) {
-		const timing = d.timing;
-		items.push({ id: MENU_IDS.latency, label: "Latency summary", description: "Enter to view.", currentValue: "view", submenu: infoView(() => { const lines = timingSummaryLines(timing.summary()); return lines.length ? lines : ["No timed requests yet."]; }, truncate) });
+	if (d.stats) {
+		const stats = d.stats, timing = d.timing, settings = d.settings;
+		items.push({ id: MENU_IDS.stats, label: "Stats", description: "Prompt cache and, while latency timing is on, latency and output rate. Enter to view.", currentValue: "view", submenu: infoView(() => statsText(stats.summary(), { on: settings.timing(), summary: timing?.summary() }).split("\n"), truncate) });
 	}
 	return items;
 }

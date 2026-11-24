@@ -93,7 +93,7 @@ export function registerRelay(pi: Pick<ExtensionAPI, "registerProvider" | "on" |
 	const rateLimit = createRateLimitHandler({ notifications: () => settings.notify(), usageStatus: () => settings.usageStatus(), reset: () => ({ when: settings.resetWhen(), format: settings.resetFormat() }), statusLabel: () => settings.statusLabel(), login: showLogin });
 	pi.on("after_provider_response", rateLimit as any);
 	pi.registerCommand("claude-relay", {
-		description: "Claude relay settings menu (no arguments), prompt-cache stats, latency timing and usage in the status bar: /claude-relay [notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact] | label [claude|relay|loop|asterisk|star|keycap]]",
+		description: "Claude relay settings menu (no arguments), stats (prompt cache and latency), the latency timing switch and usage in the status bar: /claude-relay [notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact] | label [claude|relay|loop|asterisk|star|keycap]]",
 		getArgumentCompletions: relayArgumentCompletions,
 		handler: async (args, ctx) => {
 			// No arguments in an interactive Pi: the settings menu; anywhere else (or if it cannot open) the text command.
