@@ -123,7 +123,7 @@ test("opted out: no login status", () => {
 
 // --- /claude-relay notify (S6) ---
 const STATE = (w: string, l: string) => `Claude relay notifications: warning ${w}, limit ${l}`;
-const USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact] | label [claude|relay|spark]";
+const USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact] | label [claude|relay|loop|asterisk|star|keycap]";
 
 function tmpSettings() {
 	const dir = mkdtempSync(join(tmpdir(), "relay-settings-"));

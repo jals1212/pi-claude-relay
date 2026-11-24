@@ -271,14 +271,13 @@ test("completions offer reset, its when/format and their values", () => {
 test("status label is claude by default; a missing, corrupt or unknown status.label means claude; it persists next to the other status keys", () => inTmp((dir) => {
 	const file = join(dir, "s.json");
 	assert.equal(createSettings(file).statusLabel(), "claude");
-	for (const v of [{ label: "Relay" }, { label: "symbol" }, { label: 1 }, "relay", {}]) { writeFileSync(file, JSON.stringify({ status: v })); assert.equal(createSettings(file).statusLabel(), "claude", JSON.stringify(v)); }
+	for (const v of [{ label: "Relay" }, { label: "symbol" }, { label: "spark" }, { label: 1 }, "relay", {}]) { writeFileSync(file, JSON.stringify({ status: v })); assert.equal(createSettings(file).statusLabel(), "claude", JSON.stringify(v)); }
 	writeFileSync(file, JSON.stringify({ status: { usage: false, resetWhen: "never" } }));
 	const s = createSettings(file);
 	assert.equal(s.setStatusLabel("relay"), true);
 	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { status: { usage: false, resetWhen: "never", label: "relay" } });
 	assert.equal(createSettings(file).statusLabel(), "relay");
-	assert.equal(s.setStatusLabel("spark"), true);
-	assert.equal(createSettings(file).statusLabel(), "spark");
+	for (const v of ["loop", "asterisk", "star", "keycap"] as const) { assert.equal(s.setStatusLabel(v), true); assert.equal(createSettings(file).statusLabel(), v); }
 }));
 
 test("/claude-relay label shows, sets and repaints; invalid input warns with the usage and changes nothing", () => inTmp((dir) => {
@@ -292,13 +291,20 @@ test("/claude-relay label shows, sets and repaints; invalid input warns with the
 	run("label relay");
 	assert.deepEqual(notes.pop(), ["Claude relay status bar label: relay", "info"]);
 	assert.equal(repaints, 1);
-	for (const bad of ["label icon", "label symbol", "label claude now"]) { run(bad); assert.deepEqual(notes.pop(), [COMMAND_USAGE, "warning"], bad); }
-	assert.equal(repaints, 1);
+	run("label asterisk");
+	assert.deepEqual(notes.pop(), ["Claude relay status bar label: asterisk", "info"]);
+	run("label loop");
+	assert.deepEqual(notes.pop(), ["Claude relay status bar label: loop", "info"]);
+	run("label relay");
+	notes.pop();
+	assert.equal(repaints, 4);
+	for (const bad of ["label icon", "label symbol", "label spark", "label claude now"]) { run(bad); assert.deepEqual(notes.pop(), [COMMAND_USAGE, "warning"], bad); }
+	assert.equal(repaints, 4);
 	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { status: { label: "relay" } });
 }));
 
-test("completions offer label and its claude/relay/spark", () => {
+test("completions offer label and its claude/relay/loop/asterisk/star/keycap", () => {
 	assert.deepEqual(relayArgumentCompletions("la")?.map((i) => i.value), ["label"]);
-	assert.deepEqual(relayArgumentCompletions("label ")?.map((i) => i.value), ["label claude", "label relay", "label spark"]);
+	assert.deepEqual(relayArgumentCompletions("label ")?.map((i) => i.value), ["label claude", "label relay", "label loop", "label asterisk", "label star", "label keycap"]);
 	assert.equal(relayArgumentCompletions("label relay "), null);
 });

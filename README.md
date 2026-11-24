@@ -86,7 +86,7 @@ The menu and the text subcommands save to one file per Pi space, `<agent home>/c
 | `status.usage` | `true` | `/claude-relay status on\|off` | Usage in the footer status; off shows the login line |
 | `status.resetWhen` | `"always"` | `/claude-relay reset when always\|near\|never` | When the footer shows each usage window's reset time |
 | `status.resetFormat` | `"full"` | `/claude-relay reset format full\|compact` | How the footer shows each usage window's reset time |
-| `status.label` | `"claude"` | `/claude-relay label claude\|relay\|spark` | Prefix of the footer usage line: `Claude`, `⎍` or `✻` |
+| `status.label` | `"claude"` | `/claude-relay label claude\|relay\|loop\|asterisk\|star\|keycap` | Prefix of the footer usage line: `Claude`, `⎍`, `🔁`, `✳️`, `✴️` or `*️⃣` |
 | `timing` | `false` | `/claude-relay timing on\|off` | Latency timing log (`claude-relay-timing.jsonl`) |
 
 The file is created on the first change; a missing file, an unreadable one, or a missing or invalid key means the default. Each change re-reads the file and writes only its own key, so other keys (and changes another Pi process made) are kept. Editing the file by hand works too; the relay reads it when Pi starts.
@@ -135,7 +135,10 @@ Two settings shape each window's reset time: **Reset time in status bar** choose
 /claude-relay label            # show the current choice
 /claude-relay label claude     # Claude 5h 48% ↻52m · 7d 73% ↻8h 12m   (default)
 /claude-relay label relay      # ⎍ 5h 48% ↻52m · 7d 73% ↻8h 12m   (the relay symbol)
-/claude-relay label spark      # ✻ 5h 48% ↻52m · 7d 73% ↻8h 12m
+/claude-relay label loop       # 🔁 5h 48% ↻52m · 7d 73% ↻8h 12m
+/claude-relay label asterisk   # ✳️ 5h 48% ↻52m · 7d 73% ↻8h 12m
+/claude-relay label star       # ✴️ 5h 48% ↻52m · 7d 73% ↻8h 12m
+/claude-relay label keycap     # *️⃣ 5h 48% ↻52m · 7d 73% ↻8h 12m
 ```
 
 It applies to every state of the usage line (`⎍ limit reached · resets in …` too), at once, and is saved as `{ "status": { "label": "relay" } }`; a missing or unknown value means `claude`. The login line and the pop-ups keep saying Claude.

@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - The debug log (`PI_CLAUDE_RELAY_DEBUG_LOG`) and the timing log name every config field behind a restart in a new `changed` field (`["system-prompt", "tools"]`). `reason` still names only the first, so a tool set change looked like a plain `system-prompt` restart: Pi lists the tools in the system prompt, and the system prompt is checked first. `/claude-relay stats` is unchanged.
+- Four more **Status bar label** choices: `loop` (`🔁 5h 63% ↻52m · …`) and the emoji asterisks `asterisk` (`✳️ …`), `star` (`✴️ …`) and `keycap` (`*️⃣ …`), in the `/claude-relay` menu or `/claude-relay label [claude|relay|loop|asterisk|star|keycap]`. They are emoji, so they match emoji-prefixed status lines; most terminals draw them two columns wide.
+
+### Removed
+
+- The `spark` (`✻`) **Status bar label**. A saved `"label": "spark"` now reads as the default `claude`, and `/claude-relay label spark` shows the usage text.
 
 ## 0.3.0
 

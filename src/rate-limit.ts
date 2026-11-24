@@ -110,14 +110,14 @@ function windowSegments(get: (name: string) => string | undefined, nowMs: number
 	return { segments, withReset };
 }
 
-/** The footer prefix for each label: the word `Claude`, the relay symbol `⎍`, or the Claude spark `✻`. */
-export const LABEL_PREFIX: Record<StatusLabel, string> = { claude: "Claude", relay: "⎍", spark: "✻" };
+/** The footer prefix for each label: the word `Claude`, the relay symbol `⎍`, the loop `🔁`, or the emoji asterisks `✳️`, `✴️` and `*️⃣` (with U+FE0F so they always draw as emoji). */
+export const LABEL_PREFIX: Record<StatusLabel, string> = { claude: "Claude", relay: "⎍", loop: "🔁", asterisk: "✳️", star: "✴️", keycap: "*️⃣" };
 const prefixOf = (label: StatusLabel) => LABEL_PREFIX[label] ?? LABEL_PREFIX.claude;
 
 /**
  * `reset` chooses when (`always` by default, only `near` a limit, or `never`) and how (`full` by default, or `compact`) the footer shows
  * each window's reset time. A reached limit always shows its reset time.
- * `label` chooses the footer prefix (default `claude`: `Claude 5h …`; `relay`: `⎍ 5h …`; `spark`: `✻ 5h …`). Pop-up messages always say Claude.
+ * `label` chooses the footer prefix (default `claude`: `Claude 5h …`; `relay`: `⎍ 5h …`; `loop`: `🔁 5h …`; `asterisk`: `✳️ 5h …`; `star`: `✴️ 5h …`; `keycap`: `*️⃣ 5h …`). Pop-up messages always say Claude.
  */
 export function describeRateLimitHeaders(headers: Record<string, string>, nowMs = Date.now(), reset: ResetOptions = DEFAULT_RESET, label: StatusLabel = "claude"): RateLimitDescription | undefined {
 	const prefix = prefixOf(label);

@@ -317,10 +317,13 @@ test("the handler follows the reset settings on every response and on refresh", 
 	assert.deepEqual(status.at(-1), ["claude-relay", "Claude 5h 14% · 7d 50%"]);
 });
 
-test("label relay: the footer prefix is ⎍ in every state, spark is ✻; pop-up messages still say Claude", () => {
+test("label relay: the footer prefix is ⎍ in every state, loop is 🔁, asterisk/star/keycap are emoji asterisks; pop-up messages still say Claude", () => {
 	const d = (i: any) => describeRateLimitHeaders(anthropicRateLimitHeaders(i), NOW, { when: "always", format: "compact" }, "relay")!;
-	assert.equal(describeRateLimitHeaders(anthropicRateLimitHeaders(info()), NOW, { when: "always", format: "compact" }, "spark")!.footer, "✻ 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
 	assert.equal(d(info()).footer, "⎍ 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
+	assert.equal(describeRateLimitHeaders(anthropicRateLimitHeaders(info()), NOW, { when: "always", format: "compact" }, "loop")!.footer, "🔁 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
+	assert.equal(describeRateLimitHeaders(anthropicRateLimitHeaders(info()), NOW, { when: "always", format: "compact" }, "asterisk")!.footer, "✳️ 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
+	assert.equal(describeRateLimitHeaders(anthropicRateLimitHeaders(info()), NOW, { when: "always", format: "compact" }, "star")!.footer, "✴️ 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
+	assert.equal(describeRateLimitHeaders(anthropicRateLimitHeaders(info()), NOW, { when: "always", format: "compact" }, "keycap")!.footer, "*️⃣ 5h 14% ↻2h 5m · 7d 50% ↻2d 7h");
 	assert.equal(describeRateLimitHeaders({ "anthropic-ratelimit-unified-status": "allowed" }, NOW, undefined, "relay")!.footer, "⎍ ok");
 	const r = d({ status: "rejected", resetsAt: NOW / 1000 + 7500 });
 	assert.equal(r.footer, "⎍ limit reached · resets in 2h 5m");

@@ -226,19 +226,19 @@ test("openRelayMenu: changing either reset setting repaints the footer at once",
 	} finally { r.done(); }
 });
 
-test("menu: 'Status bar label' cycles claude/relay/spark, claude by default, after the reset format; changing it repaints", async () => {
+test("menu: 'Status bar label' cycles claude/relay/loop/asterisk/star/keycap, claude by default, after the reset format; changing it repaints", async () => {
 	const r = rig();
 	try {
 		const items = menuItems(r.deps, truncate);
 		const i = items.findIndex((x) => x.id === MENU_IDS.label);
-		assert.deepEqual([items[i].label, items[i].currentValue, items[i].values], ["Status bar label", "claude", ["claude", "relay", "spark"]]);
+		assert.deepEqual([items[i].label, items[i].currentValue, items[i].values], ["Status bar label", "claude", ["claude", "relay", "loop", "asterisk", "star", "keycap"]]);
 		assert.equal(items[i - 1].id, MENU_IDS.resetFormat);
 		assert.equal(applyMenuChange(MENU_IDS.label, "icon", r.settings), undefined);
 		const seen: string[] = [];
 		await openRelayMenu(r.ctx, { ...r.deps, onUsageStatus: () => seen.push(r.settings.statusLabel()) });
 		FakeList.last.onChange(MENU_IDS.label, "relay");
-		FakeList.last.onChange(MENU_IDS.label, "spark");
-		assert.deepEqual(seen, ["relay", "spark"]);
-		assert.deepEqual(JSON.parse(readFileSync(r.file, "utf8")), { status: { label: "spark" } });
+		FakeList.last.onChange(MENU_IDS.label, "star");
+		assert.deepEqual(seen, ["relay", "star"]);
+		assert.deepEqual(JSON.parse(readFileSync(r.file, "utf8")), { status: { label: "star" } });
 	} finally { r.done(); }
 });

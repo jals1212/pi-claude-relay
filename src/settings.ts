@@ -65,9 +65,9 @@ function toResetFormat(raw: Record<string, unknown>): ResetFormat {
 	return isResetFormat(s.resetFormat) ? s.resetFormat : "full";
 }
 
-/** The footer usage line's prefix: the word `Claude`, the relay symbol `⎍`, or the Claude spark `✻`. */
-export type StatusLabel = "claude" | "relay" | "spark";
-export const STATUS_LABELS: readonly StatusLabel[] = ["claude", "relay", "spark"];
+/** The footer usage line's prefix: the word `Claude`, the relay symbol `⎍`, the loop `🔁`, or the emoji asterisks `✳️`, `✴️` and `*️⃣` (with U+FE0F so they always draw as emoji). */
+export type StatusLabel = "claude" | "relay" | "loop" | "asterisk" | "star" | "keycap";
+export const STATUS_LABELS: readonly StatusLabel[] = ["claude", "relay", "loop", "asterisk", "star", "keycap"];
 const isStatusLabel = (v: unknown): v is StatusLabel => typeof v === "string" && (STATUS_LABELS as readonly string[]).includes(v);
 
 /** `Claude` by default: a missing, unreadable or unknown `status.label` means `claude`. */
@@ -196,7 +196,7 @@ export const notifyStateLine = (n: NotifySettings) => `Claude relay notification
 export const usageStatusStateLine = (on: boolean) => `Claude relay usage in status bar: ${on ? "on" : "off"}`;
 export const resetStateLine = (when: ResetWhen, format: ResetFormat) => `Claude relay reset time in status bar: ${when}, ${format}`;
 export const statusLabelStateLine = (label: StatusLabel) => `Claude relay status bar label: ${label}`;
-export const COMMAND_USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact] | label [claude|relay|spark]";
+export const COMMAND_USAGE = "Usage: /claude-relay notify [warning|limit] [on|off] | stats | timing [on|off] | status [on|off] | reset [when always|near|never] [format full|compact] | label [claude|relay|loop|asterisk|star|keycap]";
 
 interface NotifyUi { notify?(message: string, type?: "info" | "warning" | "error"): void }
 
