@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## 0.4.1
+
+### Fixed
+
+- `/claude-relay stats` and the menu's **Stats** view show only the parts whose source is available: they no longer report latency timing as on when no timing source is wired, and the latency block still appears without the prompt-cache figures. With the relay fully set up the output is unchanged.
+
 ## 0.4.0
 
 ### Added
