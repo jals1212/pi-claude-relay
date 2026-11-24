@@ -70,7 +70,8 @@ test("the real file gets the line (mode 0600) and holds no prompt text", async (
 		const file = join(dir, "claude-relay-timing.jsonl");
 		const t = createTiming({ file, enabled: () => true });
 		t.record(report());
-		for (let i = 0; i < 50 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 10));
+		// The append is async: the file can exist before its line is written, so wait for the whole line.
+		for (let i = 0; i < 100 && !(existsSync(file) && readFileSync(file, "utf8").endsWith("\n")); i++) await new Promise((r) => setTimeout(r, 10));
 		assert.equal(statSync(file).mode & 0o777, 0o600);
 		const lines = readFileSync(file, "utf8").trim().split("\n");
 		assert.equal(lines.length, 1);
